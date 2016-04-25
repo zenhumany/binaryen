@@ -1,29 +1,23 @@
-Counts
- binary                   : 1       
- block                    : 1       
- const                    : 12      
- if                       : 4       
-Total                     : 18      
 (module
   (memory 256 256)
   (func $ifs
-    (block $block0
+    (block
       (if
         (i32.const 0)
         (i32.const 1)
       )
-      (if
+      (if_else
         (i32.const 0)
         (i32.const 1)
         (i32.const 2)
       )
-      (if
+      (if_else
         (i32.const 4)
         (i32.const 5)
         (i32.const 6)
       )
       (i32.eq
-        (if
+        (if_else
           (i32.const 4)
           (i32.const 5)
           (i32.const 6)

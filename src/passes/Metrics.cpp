@@ -23,15 +23,20 @@ namespace wasm {
 
 using namespace std;
 
-// Prints metrics between optimization passes.
+// Prints metrics on a module. If run more than once, shows the diff.
+
 struct Metrics : public WalkerPass<PostWalker<Metrics, UnifiedExpressionVisitor<Metrics>>> {
   static Metrics *lastMetricsPass;
 
   map<const char *, int> counts;
 
-  void visitExpression(Expression* curr) {
+  virtual void count(Expression* curr) {
     auto name = getExpressionName(curr);
     counts[name]++;
+  }
+
+  void visitExpression(Expression* curr) {
+    count(curr);
   }
 
   void finalize(PassRunner *runner, Module *module) override {
@@ -49,7 +54,7 @@ struct Metrics : public WalkerPass<PostWalker<Metrics, UnifiedExpressionVisitor<
     });
     for (auto* key : keys) {
       auto value = counts[key];
-      o << " " << left << setw(15) << key << ": " << setw(8)
+      o << " " << left << setw(25) << key << ": " << setw(8)
         << value;
       if (lastMetricsPass) {
         if (lastMetricsPass->counts.count(key)) {
@@ -69,12 +74,57 @@ struct Metrics : public WalkerPass<PostWalker<Metrics, UnifiedExpressionVisitor<
       }
       o << "\n";
     }
-    o << left << setw(16) << "Total" << ": " << setw(8) << total << '\n';
+    o << left << setw(26) << "Total" << ": " << setw(8) << total << '\n';
     lastMetricsPass = this;
   }
 };
 
+// Detailed metrics, drilling down into specific opcodes for some node types.
+
+struct DetailedMetrics : public Metrics {
+  void count(Expression* curr) override {
+    const char *name;
+    if (auto* unary = curr->dynCast<Unary>()) {
+      switch (unary->op) {
+        case Clz:              name = "unary-clz";     break;
+        case Ctz:              name = "unary-ctz";     break;
+        case Popcnt:           name = "unary-popcnt";  break;
+        case EqZ:              name = "unary-eqz";     break;
+        case Neg:              name = "unary-neg";     break;
+        case Abs:              name = "unary-abs";     break;
+        case Ceil:             name = "unary-ceil";    break;
+        case Floor:            name = "unary-floor";   break;
+        case Trunc:            name = "unary-trunc";   break;
+        case Nearest:          name = "unary-nearest"; break;
+        case Sqrt:             name = "unary-sqrt";    break;
+        case ExtendSInt32:     name = "unary-extend_s/i32"; break;
+        case ExtendUInt32:     name = "unary-extend_u/i32"; break;
+        case WrapInt64:        name = "unary-wrap/i64"; break;
+        case TruncSFloat32:    name = "unary-trunc_s/f32"; break;
+        case TruncUFloat32:    name = "unary-trunc_u/f32"; break;
+        case TruncSFloat64:    name = "unary-trunc_s/f64"; break;
+        case TruncUFloat64:    name = "unary-trunc_u/f64"; break;
+        case ReinterpretFloat: name = "unary-reinterpret/f*"; break;
+        case ConvertUInt32:    name = "unary-convert_u/i32"; break;
+        case ConvertSInt32:    name = "unary-convert_s/i32"; break;
+        case ConvertUInt64:    name = "unary-convert_u/i64"; break;
+        case ConvertSInt64:    name = "unary-convert_s/i64"; break;
+        case PromoteFloat32:   name = "unary-promote/f32"; break;
+        case DemoteFloat64:    name = "unary-demote/f64"; break;
+        case ReinterpretInt:   name = "unary-reinterpret/i*"; break;
+        default: abort();
+      }
+    } else {
+      name = getExpressionName(curr);
+    }
+    counts[name]++;
+  }
+};
+
 Metrics *Metrics::lastMetricsPass;
+
 static RegisterPass<Metrics> registerPass("metrics", "reports metrics");
+
+static RegisterPass<DetailedMetrics> registerDetailedPass("detailed-metrics", "reports detailed metrics");
 
 } // namespace wasm
