@@ -789,9 +789,25 @@ public:
 
   std::vector<Name> breakStack;
 
+  // Emit a core expression opcode + immediates
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes opcode) {
+    o << int8_t(opcode);
+    return o;
+  }
+  template<typename X>
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes opcode, X x) {
+    o << int8_t(opcode) << x;
+    return o;
+  }
+  template<typename X, typename Y>
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes opcode, X x, Y y) {
+    o << int8_t(opcode) << x << y;
+    return o;
+  }
+
   void visitBlock(Block *curr) {
     if (debug) std::cerr << "zz node: Block" << std::endl;
-    o << int8_t(BinaryConsts::Block);
+    emitExpression(BinaryConsts::Block);
     breakStack.push_back(curr->name);
     size_t i = 0;
     for (auto* child : curr->list) {
@@ -799,7 +815,7 @@ public:
       recurse(child);
     }
     breakStack.pop_back();
-    o << int8_t(BinaryConsts::End);
+    emitExpression(BinaryConsts::End);
   }
 
   // emits a node, but if it is a block with no name, emit a list of its contents
@@ -817,28 +833,28 @@ public:
   void visitIf(If *curr) {
     if (debug) std::cerr << "zz node: If" << std::endl;
     recurse(curr->condition);
-    o << int8_t(BinaryConsts::If);
+    emitExpression(BinaryConsts::If);
     breakStack.push_back(IMPOSSIBLE_CONTINUE); // the binary format requires this; we have a block if we need one; TODO: optimize
     recursePossibleBlockContents(curr->ifTrue); // TODO: emit block contents directly, if possible
     breakStack.pop_back();
     if (curr->ifFalse) {
-      o << int8_t(BinaryConsts::Else);
+      emitExpression(BinaryConsts::Else);
       breakStack.push_back(IMPOSSIBLE_CONTINUE); // TODO ditto
       recursePossibleBlockContents(curr->ifFalse);
       breakStack.pop_back();
     }
-    o << int8_t(BinaryConsts::End);
+    emitExpression(BinaryConsts::End);
   }
   void visitLoop(Loop *curr) {
     if (debug) std::cerr << "zz node: Loop" << std::endl;
     // TODO: optimize, as we usually have a block as our singleton child
-    o << int8_t(BinaryConsts::Loop);
+    emitExpression(BinaryConsts::Loop);
     breakStack.push_back(curr->out);
     breakStack.push_back(curr->in);
     recurse(curr->body);
     breakStack.pop_back();
     breakStack.pop_back();
-    o << int8_t(BinaryConsts::End);
+    emitExpression(BinaryConsts::End);
   }
 
   int32_t getBreakIndex(Name name) { // -1 if not found
@@ -857,8 +873,8 @@ public:
       recurse(curr->value);
     }
     if (curr->condition) recurse(curr->condition);
-    o << int8_t(curr->condition ? BinaryConsts::BrIf : BinaryConsts::Br)
-      << U32LEB(curr->value ? 1 : 0) << U32LEB(getBreakIndex(curr->name));
+    emitExpression(curr->condition ? BinaryConsts::BrIf : BinaryConsts::Br,
+                   U32LEB(curr->value ? 1 : 0), U32LEB(getBreakIndex(curr->name)));
   }
   void visitSwitch(Switch *curr) {
     if (debug) std::cerr << "zz node: Switch" << std::endl;
@@ -866,7 +882,7 @@ public:
       recurse(curr->value);
     }
     recurse(curr->condition);
-    o << int8_t(BinaryConsts::TableSwitch) << U32LEB(curr->value ? 1 : 0) << U32LEB(curr->targets.size());
+    emitExpression(BinaryConsts::TableSwitch, U32LEB(curr->value ? 1 : 0), U32LEB(curr->targets.size()));
     for (auto target : curr->targets) {
       o << uint32_t(getBreakIndex(target));
     }
@@ -877,14 +893,14 @@ public:
     for (auto* operand : curr->operands) {
       recurse(operand);
     }
-    o << int8_t(BinaryConsts::CallFunction) << U32LEB(curr->operands.size()) << U32LEB(getFunctionIndex(curr->target));
+    emitExpression(BinaryConsts::CallFunction, U32LEB(curr->operands.size()), U32LEB(getFunctionIndex(curr->target)));
   }
   void visitCallImport(CallImport *curr) {
     if (debug) std::cerr << "zz node: CallImport" << std::endl;
     for (auto* operand : curr->operands) {
       recurse(operand);
     }
-    o << int8_t(BinaryConsts::CallImport) << U32LEB(curr->operands.size()) << U32LEB(getImportIndex(curr->target));
+    emitExpression(BinaryConsts::CallImport, U32LEB(curr->operands.size()), U32LEB(getImportIndex(curr->target)));
   }
   void visitCallIndirect(CallIndirect *curr) {
     if (debug) std::cerr << "zz node: CallIndirect" << std::endl;
@@ -892,99 +908,100 @@ public:
     for (auto* operand : curr->operands) {
       recurse(operand);
     }
-    o << int8_t(BinaryConsts::CallIndirect) << U32LEB(curr->operands.size()) << U32LEB(getFunctionTypeIndex(curr->fullType->name));
+    emitExpression(BinaryConsts::CallIndirect, U32LEB(curr->operands.size()), U32LEB(getFunctionTypeIndex(curr->fullType->name)));
   }
   void visitGetLocal(GetLocal *curr) {
     if (debug) std::cerr << "zz node: GetLocal " << (o.size() + 1) << std::endl;
-    o << int8_t(BinaryConsts::GetLocal) << U32LEB(mappedLocals[curr->index]);
+    emitExpression(BinaryConsts::GetLocal, U32LEB(mappedLocals[curr->index]));
   }
   void visitSetLocal(SetLocal *curr) {
     if (debug) std::cerr << "zz node: SetLocal" << std::endl;
     recurse(curr->value);
-    o << int8_t(BinaryConsts::SetLocal) << U32LEB(mappedLocals[curr->index]);
+    emitExpression(BinaryConsts::SetLocal, U32LEB(mappedLocals[curr->index]));
   }
 
-  void emitMemoryAccess(size_t alignment, size_t bytes, uint32_t offset) {
-    o << U32LEB(Log2(alignment ? alignment : bytes));
-    o << U32LEB(offset);
+  void emitMemoryAccess(BinaryConsts::ASTNodes code, size_t alignment, size_t bytes, uint32_t offset) {
+    emitExpression(code, U32LEB(Log2(alignment ? alignment : bytes)), U32LEB(offset));
   }
 
   void visitLoad(Load *curr) {
     if (debug) std::cerr << "zz node: Load" << std::endl;
     recurse(curr->ptr);
+    BinaryConsts::ASTNodes code;
     switch (curr->type) {
       case i32: {
         switch (curr->bytes) {
-          case 1: o << int8_t(curr->signed_ ? BinaryConsts::I32LoadMem8S : BinaryConsts::I32LoadMem8U); break;
-          case 2: o << int8_t(curr->signed_ ? BinaryConsts::I32LoadMem16S : BinaryConsts::I32LoadMem16U); break;
-          case 4: o << int8_t(BinaryConsts::I32LoadMem); break;
+          case 1: code = curr->signed_ ? BinaryConsts::I32LoadMem8S : BinaryConsts::I32LoadMem8U; break;
+          case 2: code = curr->signed_ ? BinaryConsts::I32LoadMem16S : BinaryConsts::I32LoadMem16U; break;
+          case 4: code = BinaryConsts::I32LoadMem; break;
           default: abort();
         }
         break;
       }
       case i64: {
         switch (curr->bytes) {
-          case 1: o << int8_t(curr->signed_ ? BinaryConsts::I64LoadMem8S : BinaryConsts::I64LoadMem8U); break;
-          case 2: o << int8_t(curr->signed_ ? BinaryConsts::I64LoadMem16S : BinaryConsts::I64LoadMem16U); break;
-          case 4: o << int8_t(curr->signed_ ? BinaryConsts::I64LoadMem32S : BinaryConsts::I64LoadMem32U); break;
-          case 8: o << int8_t(BinaryConsts::I64LoadMem); break;
+          case 1: code = curr->signed_ ? BinaryConsts::I64LoadMem8S : BinaryConsts::I64LoadMem8U; break;
+          case 2: code = curr->signed_ ? BinaryConsts::I64LoadMem16S : BinaryConsts::I64LoadMem16U; break;
+          case 4: code = curr->signed_ ? BinaryConsts::I64LoadMem32S : BinaryConsts::I64LoadMem32U; break;
+          case 8: code = BinaryConsts::I64LoadMem; break;
           default: abort();
         }
         break;
       }
-      case f32: o << int8_t(BinaryConsts::F32LoadMem); break;
-      case f64: o << int8_t(BinaryConsts::F64LoadMem); break;
+      case f32: code = BinaryConsts::F32LoadMem; break;
+      case f64: code = BinaryConsts::F64LoadMem; break;
       default: abort();
     }
-    emitMemoryAccess(curr->align, curr->bytes, curr->offset);
+    emitMemoryAccess(code, curr->align, curr->bytes, curr->offset);
   }
   void visitStore(Store *curr) {
     if (debug) std::cerr << "zz node: Store" << std::endl;
     recurse(curr->ptr);
     recurse(curr->value);
+    BinaryConsts::ASTNodes code;
     switch (curr->type) {
       case i32: {
         switch (curr->bytes) {
-          case 1: o << int8_t(BinaryConsts::I32StoreMem8); break;
-          case 2: o << int8_t(BinaryConsts::I32StoreMem16); break;
-          case 4: o << int8_t(BinaryConsts::I32StoreMem); break;
+          case 1: code = BinaryConsts::I32StoreMem8; break;
+          case 2: code = BinaryConsts::I32StoreMem16; break;
+          case 4: code = BinaryConsts::I32StoreMem; break;
           default: abort();
         }
         break;
       }
       case i64: {
         switch (curr->bytes) {
-          case 1: o << int8_t(BinaryConsts::I64StoreMem8); break;
-          case 2: o << int8_t(BinaryConsts::I64StoreMem16); break;
-          case 4: o << int8_t(BinaryConsts::I64StoreMem32); break;
-          case 8: o << int8_t(BinaryConsts::I64StoreMem); break;
+          case 1: code = BinaryConsts::I64StoreMem8; break;
+          case 2: code = BinaryConsts::I64StoreMem16; break;
+          case 4: code = BinaryConsts::I64StoreMem32; break;
+          case 8: code = BinaryConsts::I64StoreMem; break;
           default: abort();
         }
         break;
       }
-      case f32: o << int8_t(BinaryConsts::F32StoreMem); break;
-      case f64: o << int8_t(BinaryConsts::F64StoreMem); break;
+      case f32: code = BinaryConsts::F32StoreMem; break;
+      case f64: code = BinaryConsts::F64StoreMem; break;
       default: abort();
     }
-    emitMemoryAccess(curr->align, curr->bytes, curr->offset);
+    emitMemoryAccess(code, curr->align, curr->bytes, curr->offset);
   }
   void visitConst(Const *curr) {
     if (debug) std::cerr << "zz node: Const" << curr << " : " << curr->type << std::endl;
     switch (curr->type) {
       case i32: {
-        o << int8_t(BinaryConsts::I32Const) << S32LEB(curr->value.geti32());
+        emitExpression(BinaryConsts::I32Const, S32LEB(curr->value.geti32()));
         break;
       }
       case i64: {
-        o << int8_t(BinaryConsts::I64Const) << S64LEB(curr->value.geti64());
+        emitExpression(BinaryConsts::I64Const, S64LEB(curr->value.geti64()));
         break;
       }
       case f32: {
-        o << int8_t(BinaryConsts::F32Const) << curr->value.getf32();
+        emitExpression(BinaryConsts::F32Const, curr->value.getf32());
         break;
       }
       case f64: {
-        o << int8_t(BinaryConsts::F64Const) << curr->value.getf64();
+        emitExpression(BinaryConsts::F64Const, curr->value.getf64());
         break;
       }
       default: abort();
@@ -995,32 +1012,32 @@ public:
     if (debug) std::cerr << "zz node: Unary" << std::endl;
     recurse(curr->value);
     switch (curr->op) {
-      case Clz:              o << int8_t(curr->type == i32 ? BinaryConsts::I32Clz        : BinaryConsts::I64Clz); break;
-      case Ctz:              o << int8_t(curr->type == i32 ? BinaryConsts::I32Ctz        : BinaryConsts::I64Ctz); break;
-      case Popcnt:           o << int8_t(curr->type == i32 ? BinaryConsts::I32Popcnt     : BinaryConsts::I64Popcnt); break;
-      case EqZ:              o << int8_t(curr->type == i32 ? BinaryConsts::I32EqZ        : BinaryConsts::I64EqZ); break;
-      case Neg:              o << int8_t(curr->type == f32 ? BinaryConsts::F32Neg        : BinaryConsts::F64Neg); break;
-      case Abs:              o << int8_t(curr->type == f32 ? BinaryConsts::F32Abs        : BinaryConsts::F64Abs); break;
-      case Ceil:             o << int8_t(curr->type == f32 ? BinaryConsts::F32Ceil       : BinaryConsts::F64Ceil); break;
-      case Floor:            o << int8_t(curr->type == f32 ? BinaryConsts::F32Floor      : BinaryConsts::F64Floor); break;
-      case Trunc:            o << int8_t(curr->type == f32 ? BinaryConsts::F32Trunc      : BinaryConsts::F64Trunc); break;
-      case Nearest:          o << int8_t(curr->type == f32 ? BinaryConsts::F32NearestInt : BinaryConsts::F64NearestInt); break;
-      case Sqrt:             o << int8_t(curr->type == f32 ? BinaryConsts::F32Sqrt       : BinaryConsts::F64Sqrt); break;
-      case ExtendSInt32:     o << int8_t(BinaryConsts::I64STruncI32); break;
-      case ExtendUInt32:     o << int8_t(BinaryConsts::I64UTruncI32); break;
-      case WrapInt64:        o << int8_t(BinaryConsts::I32ConvertI64); break;
-      case TruncUFloat32:    o << int8_t(curr->type == i32 ? BinaryConsts::I32UTruncF32 : BinaryConsts::I64UTruncF32); break;
-      case TruncSFloat32:    o << int8_t(curr->type == i32 ? BinaryConsts::I32STruncF32 : BinaryConsts::I64STruncF32); break;
-      case TruncUFloat64:    o << int8_t(curr->type == i32 ? BinaryConsts::I32UTruncF64 : BinaryConsts::I64UTruncF64); break;
-      case TruncSFloat64:    o << int8_t(curr->type == i32 ? BinaryConsts::I32STruncF64 : BinaryConsts::I64STruncF64); break;
-      case ConvertUInt32:    o << int8_t(curr->type == f32 ? BinaryConsts::F32UConvertI32 : BinaryConsts::F64UConvertI32); break;
-      case ConvertSInt32:    o << int8_t(curr->type == f32 ? BinaryConsts::F32SConvertI32 : BinaryConsts::F64SConvertI32); break;
-      case ConvertUInt64:    o << int8_t(curr->type == f32 ? BinaryConsts::F32UConvertI64 : BinaryConsts::F64UConvertI64); break;
-      case ConvertSInt64:    o << int8_t(curr->type == f32 ? BinaryConsts::F32SConvertI64 : BinaryConsts::F64SConvertI64); break;
-      case DemoteFloat64:    o << int8_t(BinaryConsts::F32ConvertF64); break;
-      case PromoteFloat32:   o << int8_t(BinaryConsts::F64ConvertF32); break;
-      case ReinterpretFloat: o << int8_t(curr->type == i32 ? BinaryConsts::I32ReinterpretF32 : BinaryConsts::I64ReinterpretF64); break;
-      case ReinterpretInt:   o << int8_t(curr->type == f32 ? BinaryConsts::F32ReinterpretI32 : BinaryConsts::F64ReinterpretI64); break;
+      case Clz:              emitExpression(curr->type == i32 ? BinaryConsts::I32Clz        : BinaryConsts::I64Clz); break;
+      case Ctz:              emitExpression(curr->type == i32 ? BinaryConsts::I32Ctz        : BinaryConsts::I64Ctz); break;
+      case Popcnt:           emitExpression(curr->type == i32 ? BinaryConsts::I32Popcnt     : BinaryConsts::I64Popcnt); break;
+      case EqZ:              emitExpression(curr->type == i32 ? BinaryConsts::I32EqZ        : BinaryConsts::I64EqZ); break;
+      case Neg:              emitExpression(curr->type == f32 ? BinaryConsts::F32Neg        : BinaryConsts::F64Neg); break;
+      case Abs:              emitExpression(curr->type == f32 ? BinaryConsts::F32Abs        : BinaryConsts::F64Abs); break;
+      case Ceil:             emitExpression(curr->type == f32 ? BinaryConsts::F32Ceil       : BinaryConsts::F64Ceil); break;
+      case Floor:            emitExpression(curr->type == f32 ? BinaryConsts::F32Floor      : BinaryConsts::F64Floor); break;
+      case Trunc:            emitExpression(curr->type == f32 ? BinaryConsts::F32Trunc      : BinaryConsts::F64Trunc); break;
+      case Nearest:          emitExpression(curr->type == f32 ? BinaryConsts::F32NearestInt : BinaryConsts::F64NearestInt); break;
+      case Sqrt:             emitExpression(curr->type == f32 ? BinaryConsts::F32Sqrt       : BinaryConsts::F64Sqrt); break;
+      case ExtendSInt32:     emitExpression(BinaryConsts::I64STruncI32); break;
+      case ExtendUInt32:     emitExpression(BinaryConsts::I64UTruncI32); break;
+      case WrapInt64:        emitExpression(BinaryConsts::I32ConvertI64); break;
+      case TruncUFloat32:    emitExpression(curr->type == i32 ? BinaryConsts::I32UTruncF32 : BinaryConsts::I64UTruncF32); break;
+      case TruncSFloat32:    emitExpression(curr->type == i32 ? BinaryConsts::I32STruncF32 : BinaryConsts::I64STruncF32); break;
+      case TruncUFloat64:    emitExpression(curr->type == i32 ? BinaryConsts::I32UTruncF64 : BinaryConsts::I64UTruncF64); break;
+      case TruncSFloat64:    emitExpression(curr->type == i32 ? BinaryConsts::I32STruncF64 : BinaryConsts::I64STruncF64); break;
+      case ConvertUInt32:    emitExpression(curr->type == f32 ? BinaryConsts::F32UConvertI32 : BinaryConsts::F64UConvertI32); break;
+      case ConvertSInt32:    emitExpression(curr->type == f32 ? BinaryConsts::F32SConvertI32 : BinaryConsts::F64SConvertI32); break;
+      case ConvertUInt64:    emitExpression(curr->type == f32 ? BinaryConsts::F32UConvertI64 : BinaryConsts::F64UConvertI64); break;
+      case ConvertSInt64:    emitExpression(curr->type == f32 ? BinaryConsts::F32SConvertI64 : BinaryConsts::F64SConvertI64); break;
+      case DemoteFloat64:    emitExpression(BinaryConsts::F32ConvertF64); break;
+      case PromoteFloat32:   emitExpression(BinaryConsts::F64ConvertF32); break;
+      case ReinterpretFloat: emitExpression(curr->type == i32 ? BinaryConsts::I32ReinterpretF32 : BinaryConsts::I64ReinterpretF64); break;
+      case ReinterpretInt:   emitExpression(curr->type == f32 ? BinaryConsts::F32ReinterpretI32 : BinaryConsts::F64ReinterpretI64); break;
       default: abort();
     }
   }
@@ -1030,26 +1047,26 @@ public:
     recurse(curr->right);
     #define TYPED_CODE(code) { \
       switch (getReachableWasmType(curr->left->type, curr->right->type)) { \
-        case i32: o << int8_t(BinaryConsts::I32##code); break; \
-        case i64: o << int8_t(BinaryConsts::I64##code); break; \
-        case f32: o << int8_t(BinaryConsts::F32##code); break; \
-        case f64: o << int8_t(BinaryConsts::F64##code); break; \
+        case i32: emitExpression(BinaryConsts::I32##code); break; \
+        case i64: emitExpression(BinaryConsts::I64##code); break; \
+        case f32: emitExpression(BinaryConsts::F32##code); break; \
+        case f64: emitExpression(BinaryConsts::F64##code); break; \
         default: abort(); \
       } \
       break; \
     }
     #define INT_TYPED_CODE(code) { \
       switch (getReachableWasmType(curr->left->type, curr->right->type)) { \
-        case i32: o << int8_t(BinaryConsts::I32##code); break; \
-        case i64: o << int8_t(BinaryConsts::I64##code); break; \
+        case i32: emitExpression(BinaryConsts::I32##code); break; \
+        case i64: emitExpression(BinaryConsts::I64##code); break; \
         default: abort(); \
       } \
       break; \
     }
     #define FLOAT_TYPED_CODE(code) { \
       switch (getReachableWasmType(curr->left->type, curr->right->type)) { \
-        case f32: o << int8_t(BinaryConsts::F32##code); break; \
-        case f64: o << int8_t(BinaryConsts::F64##code); break; \
+        case f32: emitExpression(BinaryConsts::F32##code); break; \
+        case f64: emitExpression(BinaryConsts::F64##code); break; \
         default: abort(); \
       } \
       break; \
@@ -1100,25 +1117,25 @@ public:
     recurse(curr->ifTrue);
     recurse(curr->ifFalse);
     recurse(curr->condition);
-    o << int8_t(BinaryConsts::Select);
+    emitExpression(BinaryConsts::Select);
   }
   void visitReturn(Return *curr) {
     if (debug) std::cerr << "zz node: Return" << std::endl;
     if (curr->value) {
       recurse(curr->value);
     }
-    o << int8_t(BinaryConsts::Return) << U32LEB(curr->value ? 1 : 0);
+    emitExpression(BinaryConsts::Return, U32LEB(curr->value ? 1 : 0));
   }
   void visitHost(Host *curr) {
     if (debug) std::cerr << "zz node: Host" << std::endl;
     switch (curr->op) {
       case CurrentMemory: {
-        o << int8_t(BinaryConsts::CurrentMemory);
+        emitExpression(BinaryConsts::CurrentMemory);
         break;
       }
       case GrowMemory: {
         recurse(curr->operands[0]);
-        o << int8_t(BinaryConsts::GrowMemory);
+        emitExpression(BinaryConsts::GrowMemory);
         break;
       }
       default: abort();
@@ -1126,11 +1143,11 @@ public:
   }
   void visitNop(Nop *curr) {
     if (debug) std::cerr << "zz node: Nop" << std::endl;
-    o << int8_t(BinaryConsts::Nop);
+    emitExpression(BinaryConsts::Nop);
   }
   void visitUnreachable(Unreachable *curr) {
     if (debug) std::cerr << "zz node: Unreachable" << std::endl;
-    o << int8_t(BinaryConsts::Unreachable);
+    emitExpression(BinaryConsts::Unreachable);
   }
 };
 
