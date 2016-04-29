@@ -439,6 +439,8 @@ int8_t binaryWasmType(WasmType type) {
   }
 }
 
+// Writer, emits binary
+
 class WasmBinaryWriter : public Visitor<WasmBinaryWriter, void> {
   Module* wasm;
   BufferWithRandomAccess& o;
@@ -790,18 +792,34 @@ public:
   std::vector<Name> breakStack;
 
   // Emit a core expression opcode + immediates
-  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes opcode) {
-    o << int8_t(opcode);
+  virtual BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op) {
+    o << int8_t(op);
     return o;
   }
-  template<typename X>
-  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes opcode, X x) {
-    o << int8_t(opcode) << x;
+
+  virtual BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, U32LEB x) {
+    o << int8_t(op) << x;
     return o;
   }
-  template<typename X, typename Y>
-  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes opcode, X x, Y y) {
-    o << int8_t(opcode) << x << y;
+  virtual BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, S32LEB x) {
+    o << int8_t(op) << x;
+    return o;
+  }
+  virtual BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, S64LEB x) {
+    o << int8_t(op) << x;
+    return o;
+  }
+  virtual BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, float x) {
+    o << int8_t(op) << x;
+    return o;
+  }
+  virtual BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, double x) {
+    o << int8_t(op) << x;
+    return o;
+  }
+
+  virtual BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, U32LEB x, U32LEB y) {
+    o << int8_t(op) << x << y;
     return o;
   }
 
@@ -1150,6 +1168,105 @@ public:
     emitExpression(BinaryConsts::Unreachable);
   }
 };
+
+// Opcode info and analysis
+
+struct OpcodeInfo {
+  std::vector<size_t> freqs; // opcode => frequency
+  std::vector<size_t> sizes; // opcode => size
+
+  OpcodeInfo() {
+    // we assume 256 opcodes
+    freqs.resize(256);
+    sizes.resize(256);
+  }
+
+  void record(BinaryConsts::ASTNodes op, size_t size) {
+    assert(op < freqs.size() && op < sizes.size());
+    freqs[op]++;
+    sizes[op] = size;
+  }
+
+  size_t cost(BinaryConsts::ASTNodes op) {
+    assert(op < freqs.size() && op < sizes.size());
+    return freqs[op] * sizes[op];
+  }
+};
+
+// Binary preprocessor, emits the opcode table
+
+class WasmBinaryPreprocessor : public WasmBinaryWriter {
+  OpcodeInfo& opcodeInfo;
+
+public:
+  WasmBinaryPreprocessor(Module* input, BufferWithRandomAccess& o, OpcodeInfo& opcodeInfo, bool debug) : WasmBinaryWriter(input, o, debug), opcodeInfo(opcodeInfo) {}
+
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op) override {
+    opcodeInfo.record(op, 0);
+    return WasmBinaryWriter::emitExpression(op);
+  }
+
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, U32LEB x) override {
+    opcodeInfo.record(op, 1);
+    return WasmBinaryWriter::emitExpression(op, x);
+  }
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, S32LEB x) override {
+    opcodeInfo.record(op, 1);
+    return WasmBinaryWriter::emitExpression(op, x);
+  }
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, S64LEB x) override {
+    opcodeInfo.record(op, 1);
+    return WasmBinaryWriter::emitExpression(op, x);
+  }
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, float x) override {
+    opcodeInfo.record(op, 1);
+    return WasmBinaryWriter::emitExpression(op, x);
+  }
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, double x) override {
+    opcodeInfo.record(op, 1);
+    return WasmBinaryWriter::emitExpression(op, x);
+  }
+
+  BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, U32LEB x, U32LEB y) override {
+    opcodeInfo.record(op, 2);
+    return WasmBinaryWriter::emitExpression(op, x, y);
+  }
+};
+
+// Opcode table
+
+struct OpcodeTable {
+  //
+
+  OpcodeTable(OpcodeInfo& info) {
+    // sort by cost
+    std::vector<BinaryConsts::ASTNodes> order;
+    order.resize(256);
+    for (size_t i = 0; i < 256; i++) order[i] = BinaryConsts::ASTNodes(i);
+    for (size_t i = 0; i < 256; i++) {
+      std::cerr << "pre order[" << i << "] has opcode " << order[i] << " and cost " << info.cost(order[i]) << '\n';
+    }
+    std::sort(order.begin(), order.end(), [&info, &order](const BinaryConsts::ASTNodes& left, const BinaryConsts::ASTNodes& right) {
+      size_t leftCost = info.cost(left);
+      size_t rightCost = info.cost(right);
+      return leftCost > rightCost;
+    });
+    for (size_t i = 0; i < 256; i++) {
+      std::cerr << "order[" << i << "] has opcode " << order[i] << " and cost " << info.cost(order[i]) << '\n';
+    }
+  }
+};
+
+// Binary postprocessor, uses opcode table to write compressed binary
+
+class WasmBinaryPostprocessor : public WasmBinaryWriter {
+  OpcodeTable& opcodeTable;
+
+public:
+  WasmBinaryPostprocessor(Module* input, BufferWithRandomAccess& o, OpcodeTable& opcodeTable, bool debug) : WasmBinaryWriter(input, o, debug), opcodeTable(opcodeTable) {}
+};
+
+// Reader, builds a wasm from binary
 
 class WasmBinaryBuilder {
   Module& wasm;

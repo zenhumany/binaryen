@@ -35,6 +35,11 @@ int main(int argc, const char *argv[]) {
                 o->extra["output"] = argument;
                 Colors::disable();
               })
+      .add("--optimize", "-O", "Optimize output using opcode table",
+           Options::Arguments::Zero,
+           [](Options *o, const std::string &argument) {
+             o->extra["optimize"] = "yes";
+           })
       .add_positional("INFILE", Options::Arguments::One,
                       [](Options *o, const std::string &argument) {
                         o->extra["infile"] = argument;
@@ -53,8 +58,21 @@ int main(int argc, const char *argv[]) {
 
   if (options.debug) std::cerr << "binarification..." << std::endl;
   BufferWithRandomAccess buffer(options.debug);
-  WasmBinaryWriter writer(&wasm, buffer, options.debug);
-  writer.write();
+  if (options.extra.count("optimize") == 0) {
+    WasmBinaryWriter writer(&wasm, buffer, options.debug);
+    writer.write();
+  } else {
+    // preprocess to find optimal opcode table
+    OpcodeInfo opcodeInfo;
+    WasmBinaryPreprocessor pre(&wasm, buffer, opcodeInfo, options.debug);
+    pre.write();
+    buffer.clear();
+    // optimize
+    OpcodeTable opcodeTable(opcodeInfo);
+    // emit using opcode table
+    WasmBinaryPostprocessor post(&wasm, buffer, opcodeTable, options.debug);
+    post.write();
+  }
 
   if (options.debug) std::cerr << "writing to output..." << std::endl;
   Output output(options.extra["output"], Flags::Binary, options.debug ? Flags::Debug : Flags::Release);
