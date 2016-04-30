@@ -1324,20 +1324,25 @@ struct OpcodeTable {
       if (leftCost < rightCost) return false;
       return left->op < right->op;
     });
-    for (size_t i = 0; i < order.size(); i++) {
-      std::cerr << "order[" << i << "] has opcode " << *order[i] << " and cost " << info.cost(*order[i]) << '\n';
-    }
     // fill the table, inserting entries when a code is free for use
     size_t next = 0;
     for (size_t i = 0; i < MAX_OPCODE; i++) {
       if (info.freqs[i] > 0 || next >= order.size()) {
         used[i] = false;
-        std::cerr << "table[" << i << "] uses original opcode\n";
       } else {
         used[i] = true;
         entries[i] = *order[next];
         mapping[entries[i]] = BinaryConsts::ASTNodes(i);
         next++;
+      }
+    }
+  }
+
+  void dump() {
+    for (size_t i = 0; i < MAX_OPCODE; i++) {
+      if (used[i] == 0) {
+        std::cerr << "table[" << i << "] uses original opcode\n";
+      } else {
         std::cerr << "table[" << i << "] has " << entries[i] << "\n";
       }
     }

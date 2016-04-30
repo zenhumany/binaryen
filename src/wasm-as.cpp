@@ -69,6 +69,7 @@ int main(int argc, const char *argv[]) {
     buffer.clear();
     // optimize
     OpcodeTable opcodeTable(opcodeInfo);
+    if (options.debug) opcodeTable.dump();
     // emit using opcode table
     WasmBinaryPostprocessor post(&wasm, buffer, opcodeTable, options.debug);
     post.write();
