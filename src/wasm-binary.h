@@ -1323,6 +1323,10 @@ struct OpcodeTable {
   OpcodeEntry entries[MAX_OPCODE];
   std::map<OpcodeEntry, BinaryConsts::ASTNodes> mapping; // opcode entry => the code it uses, reverse of entries
 
+  OpcodeTable() {
+    memset(used, 0, sizeof(used));
+  }
+
   OpcodeTable(OpcodeInfo& info) {
     // sort by cost
     std::vector<const OpcodeEntry*> order;
@@ -1371,14 +1375,36 @@ struct OpcodeTable {
         auto& entry = entries[i];
         o << int8_t(i) << int8_t(entry.op) << int8_t(entry.size); // used index, real op index, size
         for (size_t j = 0; j < entry.size; j++) {
-          o << entry.values[j]; // FIXME: we do everything signed here
+          o << uint8_t(entry.values[j].type) << entry.values[j]; // FIXME: we do everything signed here
         }
       }
     }
     writer->finishSection(start);
   }
 
-  // TODO void read()
+  template<typename T>
+  void read(T* reader) {
+    auto num = reader->getInt8();
+    assert(num <= MAX_OPCODE);
+    for (size_t i = 0; i < num; i++) {
+      OpcodeEntry entry;
+      auto usedIndex = reader->getInt8();
+      entry.op = BinaryConsts::ASTNodes(reader->getInt8());
+      entry.size = reader->getInt8();
+      for (size_t j = 0; j < entry.size; j++) {
+        auto type = reader->getInt8();
+        switch (type) {
+          case i32: entry.values[j] = Literal(int32_t(reader->getS32LEB())); break; // FIXME: we do everything signed here
+          case i64: entry.values[j] = Literal(int64_t(reader->getS64LEB())); break;
+          case f32: entry.values[j] = Literal(reader->getFloat32()); break;
+          case f64: entry.values[j] = Literal(reader->getFloat64()); break;
+          default: abort();
+        }
+      }
+      used[usedIndex] = true;
+      entries[usedIndex] = entry;
+    }
+  }
 };
 
 // Binary postprocessor, uses opcode table to write compressed binary
@@ -1441,6 +1467,7 @@ class WasmBinaryBuilder {
   Module& wasm;
   MixedArena& allocator;
   std::vector<char>& input;
+  OpcodeTable opcodeTable;
   bool debug;
 
   size_t pos = 0;
@@ -1480,6 +1507,7 @@ public:
       else if (match(BinaryConsts::Section::ExportTable)) readExports();
       else if (match(BinaryConsts::Section::DataSegments)) readDataSegments();
       else if (match(BinaryConsts::Section::FunctionTable)) readFunctionTable();
+      else if (match(BinaryConsts::Section::Opcodes)) readOpcodeTable();
       else if (match(BinaryConsts::Section::Names)) readNames();
       else {
         std::cerr << "unfamiliar section: ";
@@ -1878,6 +1906,11 @@ public:
     }
   }
 
+  void readOpcodeTable() {
+    if (debug) std::cerr << "== readOpcodeTable" << std::endl;
+    opcodeTable.read(this);
+  }
+
   void readNames() {
     if (debug) std::cerr << "== readNames" << std::endl;
     auto num = getU32LEB();
@@ -1900,32 +1933,39 @@ public:
     if (debug) std::cerr << "zz recurse into " << ++depth << " at " << pos << std::endl;
     uint8_t code = getInt8();
     if (debug) std::cerr << "readExpression seeing " << (int)code << std::endl;
+    // look up in opcode table
+    OpcodeEntry* opcodeEntry = nullptr;
+    if (opcodeTable.used[code]) {
+      opcodeEntry = &opcodeTable.entries[code];
+      code = opcodeEntry->op;
+    }
+    // process the code
     switch (code) {
-      case BinaryConsts::Block:        visitBlock((curr = allocator.alloc<Block>())->cast<Block>()); break;
-      case BinaryConsts::If:           visitIf((curr = allocator.alloc<If>())->cast<If>());  break;
-      case BinaryConsts::Loop:         visitLoop((curr = allocator.alloc<Loop>())->cast<Loop>()); break;
+      case BinaryConsts::Block:        visitBlock((curr = allocator.alloc<Block>())->cast<Block>(), opcodeEntry); break;
+      case BinaryConsts::If:           visitIf((curr = allocator.alloc<If>())->cast<If>(), opcodeEntry); break;
+      case BinaryConsts::Loop:         visitLoop((curr = allocator.alloc<Loop>())->cast<Loop>(), opcodeEntry); break;
       case BinaryConsts::Br:
-      case BinaryConsts::BrIf:         visitBreak((curr = allocator.alloc<Break>())->cast<Break>(), code); break; // code distinguishes br from br_if
-      case BinaryConsts::TableSwitch:  visitSwitch((curr = allocator.alloc<Switch>())->cast<Switch>()); break;
-      case BinaryConsts::CallFunction: visitCall((curr = allocator.alloc<Call>())->cast<Call>()); break;
-      case BinaryConsts::CallImport:   visitCallImport((curr = allocator.alloc<CallImport>())->cast<CallImport>()); break;
-      case BinaryConsts::CallIndirect: visitCallIndirect((curr = allocator.alloc<CallIndirect>())->cast<CallIndirect>()); break;
-      case BinaryConsts::GetLocal:     visitGetLocal((curr = allocator.alloc<GetLocal>())->cast<GetLocal>()); break;
-      case BinaryConsts::SetLocal:     visitSetLocal((curr = allocator.alloc<SetLocal>())->cast<SetLocal>()); break;
-      case BinaryConsts::Select:       visitSelect((curr = allocator.alloc<Select>())->cast<Select>()); break;
-      case BinaryConsts::Return:       visitReturn((curr = allocator.alloc<Return>())->cast<Return>()); break;
-      case BinaryConsts::Nop:          visitNop((curr = allocator.alloc<Nop>())->cast<Nop>()); break;
-      case BinaryConsts::Unreachable:  visitUnreachable((curr = allocator.alloc<Unreachable>())->cast<Unreachable>()); break;
+      case BinaryConsts::BrIf:         visitBreak((curr = allocator.alloc<Break>())->cast<Break>(), code, opcodeEntry); break; // code distinguishes br from br_if
+      case BinaryConsts::TableSwitch:  visitSwitch((curr = allocator.alloc<Switch>())->cast<Switch>(), opcodeEntry); break;
+      case BinaryConsts::CallFunction: visitCall((curr = allocator.alloc<Call>())->cast<Call>(), opcodeEntry); break;
+      case BinaryConsts::CallImport:   visitCallImport((curr = allocator.alloc<CallImport>())->cast<CallImport>(), opcodeEntry); break;
+      case BinaryConsts::CallIndirect: visitCallIndirect((curr = allocator.alloc<CallIndirect>())->cast<CallIndirect>(), opcodeEntry); break;
+      case BinaryConsts::GetLocal:     visitGetLocal((curr = allocator.alloc<GetLocal>())->cast<GetLocal>(), opcodeEntry); break;
+      case BinaryConsts::SetLocal:     visitSetLocal((curr = allocator.alloc<SetLocal>())->cast<SetLocal>(), opcodeEntry); break;
+      case BinaryConsts::Select:       visitSelect((curr = allocator.alloc<Select>())->cast<Select>(), opcodeEntry); break;
+      case BinaryConsts::Return:       visitReturn((curr = allocator.alloc<Return>())->cast<Return>(), opcodeEntry); break;
+      case BinaryConsts::Nop:          visitNop((curr = allocator.alloc<Nop>())->cast<Nop>(), opcodeEntry); break;
+      case BinaryConsts::Unreachable:  visitUnreachable((curr = allocator.alloc<Unreachable>())->cast<Unreachable>(), opcodeEntry); break;
       case BinaryConsts::End:
       case BinaryConsts::Else:         curr = nullptr; break;
       default: {
         // otherwise, the code is a subcode TODO: optimize
-        if (maybeVisitBinary(curr, code)) break;
-        if (maybeVisitUnary(curr, code)) break;
-        if (maybeVisitConst(curr, code)) break;
-        if (maybeVisitLoad(curr, code)) break;
-        if (maybeVisitStore(curr, code)) break;
-        if (maybeVisitHost(curr, code)) break;
+        if (maybeVisitBinary(curr, code, opcodeEntry)) break;
+        if (maybeVisitUnary(curr, code, opcodeEntry)) break;
+        if (maybeVisitConst(curr, code, opcodeEntry)) break;
+        if (maybeVisitLoad(curr, code, opcodeEntry)) break;
+        if (maybeVisitStore(curr, code, opcodeEntry)) break;
+        if (maybeVisitHost(curr, code, opcodeEntry)) break;
         std::cerr << "bad code 0x" << std::hex << (int)code << std::endl;
         abort();
       }
@@ -1934,8 +1974,9 @@ public:
     return BinaryConsts::ASTNodes(code);
   }
 
-  void visitBlock(Block *curr) {
+  void visitBlock(Block *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Block" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table (which would ake this derecursing more complicated
     // special-case Block and de-recurse nested blocks in their first position, as that is
     // a common pattern that can be very highly nested.
     std::vector<Block*> stack;
@@ -2001,8 +2042,9 @@ public:
     return block;
   }
 
-  void visitIf(If *curr) {
+  void visitIf(If *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: If" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table
     curr->condition = popExpression();
     curr->ifTrue = getBlock();
     if (lastSeparator == BinaryConsts::Else) {
@@ -2011,8 +2053,9 @@ public:
     }
     assert(lastSeparator == BinaryConsts::End);
   }
-  void visitLoop(Loop *curr) {
+  void visitLoop(Loop *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Loop" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table
     curr->out = getNextLabel();
     curr->in = getNextLabel();
     breakStack.push_back(curr->out);
@@ -2028,31 +2071,50 @@ public:
     return breakStack[breakStack.size() - 1 - offset];
   }
 
-  void visitBreak(Break *curr, uint8_t code) {
+  void visitBreak(Break *curr, uint8_t code, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Break" << std::endl;
-    auto arity = getU32LEB();
+    int32_t arity, breakIndex;
+    if (opcodeEntry) {
+      arity = opcodeEntry->values[0].geti32();
+      breakIndex = opcodeEntry->values[1].geti32();
+    } else {
+      arity = getU32LEB();
+      breakIndex = getU32LEB();
+    }
     assert(arity == 0 || arity == 1);
-    curr->name = getBreakName(getU32LEB());
+    curr->name = getBreakName(breakIndex);
     if (code == BinaryConsts::BrIf) curr->condition = popExpression();
     if (arity == 1) curr->value = popExpression();
     curr->finalize();
   }
-  void visitSwitch(Switch *curr) {
+  void visitSwitch(Switch *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Switch" << std::endl;
-    auto arity = getU32LEB();
+    uint32_t arity, numTargets;
+    if (opcodeEntry) {
+      arity = opcodeEntry->values[0].geti32();
+      numTargets = opcodeEntry->values[1].geti32();
+    } else {
+      arity = getU32LEB();
+      numTargets = getU32LEB();
+    }
     assert(arity == 0 || arity == 1);
     curr->condition = popExpression();
     if (arity == 1) curr->value = popExpression();
-    auto numTargets = getU32LEB();
     for (size_t i = 0; i < numTargets; i++) {
       curr->targets.push_back(getBreakName(getInt32()));
     }
     curr->default_ = getBreakName(getInt32());
   }
-  void visitCall(Call *curr) {
+  void visitCall(Call *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Call" << std::endl;
-    auto arity = getU32LEB();
-    auto index = getU32LEB();
+    uint32_t arity, index;
+    if (opcodeEntry) {
+      arity = opcodeEntry->values[0].geti32();
+      index = opcodeEntry->values[1].geti32();
+    } else {
+      arity = getU32LEB();
+      index = getU32LEB();
+    }
     auto type = functionTypes[index];
     auto num = type->params.size();
     assert(num == arity);
@@ -2063,10 +2125,17 @@ public:
     curr->type = type->result;
     functionCalls[index].push_back(curr);
   }
-  void visitCallImport(CallImport *curr) {
+  void visitCallImport(CallImport *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: CallImport" << std::endl;
-    auto arity = getU32LEB();
-    curr->target = wasm.imports[getU32LEB()]->name;
+    uint32_t arity, index;
+    if (opcodeEntry) {
+      arity = opcodeEntry->values[0].geti32();
+      index = opcodeEntry->values[1].geti32();
+    } else {
+      arity = getU32LEB();
+      index = getU32LEB();
+    }
+    curr->target = wasm.imports[index]->name;
     auto type = wasm.getImport(curr->target)->type;
     assert(type);
     auto num = type->params.size();
@@ -2078,10 +2147,17 @@ public:
     }
     curr->type = type->result;
   }
-  void visitCallIndirect(CallIndirect *curr) {
+  void visitCallIndirect(CallIndirect *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: CallIndirect" << std::endl;
-    auto arity = getU32LEB();
-    curr->fullType = wasm.getFunctionType(getU32LEB());
+    uint32_t arity, index;
+    if (opcodeEntry) {
+      arity = opcodeEntry->values[0].geti32();
+      index = opcodeEntry->values[1].geti32();
+    } else {
+      arity = getU32LEB();
+      index = getU32LEB();
+    }
+    curr->fullType = wasm.getFunctionType(index);
     auto num = curr->fullType->params.size();
     assert(num == arity);
     curr->operands.resize(num);
@@ -2091,26 +2167,43 @@ public:
     curr->target = popExpression();
     curr->type = curr->fullType->result;
   }
-  void visitGetLocal(GetLocal *curr) {
+  void visitGetLocal(GetLocal *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: GetLocal " << pos << std::endl;
-    curr->index = getU32LEB();
+    int32_t index;
+    if (opcodeEntry) {
+      index = opcodeEntry->values[0].geti32();
+    } else {
+      index = getU32LEB();
+    }
+    curr->index = index;
     assert(curr->index < currFunction->getNumLocals());
     curr->type = currFunction->getLocalType(curr->index);
   }
-  void visitSetLocal(SetLocal *curr) {
+  void visitSetLocal(SetLocal *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: SetLocal" << std::endl;
-    curr->index = getU32LEB();
+    int32_t index;
+    if (opcodeEntry) {
+      index = opcodeEntry->values[0].geti32();
+    } else {
+      index = getU32LEB();
+    }
+    curr->index = index;
     assert(curr->index < currFunction->getNumLocals());
     curr->value = popExpression();
     curr->type = curr->value->type;
   }
 
-  void readMemoryAccess(uint32_t& alignment, size_t bytes, uint32_t& offset) {
-    alignment = Pow2(getU32LEB());
-    offset = getU32LEB();
+  void readMemoryAccess(uint32_t& alignment, size_t bytes, uint32_t& offset, OpcodeEntry* opcodeEntry) {
+    if (opcodeEntry) {
+      alignment = opcodeEntry->values[0].geti32();
+      offset = opcodeEntry->values[0].geti32();
+    } else {
+      alignment = Pow2(getU32LEB());
+      offset = getU32LEB();
+    }
   }
 
-  bool maybeVisitLoad(Expression*& out, uint8_t code) {
+  bool maybeVisitLoad(Expression*& out, uint8_t code, OpcodeEntry* opcodeEntry) {
     Load* curr;
     switch (code) {
       case BinaryConsts::I32LoadMem8S:  curr = allocator.alloc<Load>(); curr->bytes = 1; curr->type = i32; curr->signed_ = true; break;
@@ -2130,12 +2223,12 @@ public:
       default: return false;
     }
     if (debug) std::cerr << "zz node: Load" << std::endl;
-    readMemoryAccess(curr->align, curr->bytes, curr->offset);
+    readMemoryAccess(curr->align, curr->bytes, curr->offset, opcodeEntry);
     curr->ptr = popExpression();
     out = curr;
     return true;
   }
-  bool maybeVisitStore(Expression*& out, uint8_t code) {
+  bool maybeVisitStore(Expression*& out, uint8_t code, OpcodeEntry* opcodeEntry) {
     Store* curr;
     switch (code) {
       case BinaryConsts::I32StoreMem8:  curr = allocator.alloc<Store>(); curr->bytes = 1; curr->type = i32; break;
@@ -2150,27 +2243,39 @@ public:
       default: return false;
     }
     if (debug) std::cerr << "zz node: Store" << std::endl;
-    readMemoryAccess(curr->align, curr->bytes, curr->offset);
+    readMemoryAccess(curr->align, curr->bytes, curr->offset, opcodeEntry);
     curr->value = popExpression();
     curr->ptr = popExpression();
     out = curr;
     return true;
   }
-  bool maybeVisitConst(Expression*& out, uint8_t code) {
+  bool maybeVisitConst(Expression*& out, uint8_t code, OpcodeEntry* opcodeEntry) {
     Const* curr;
     switch (code) {
-      case BinaryConsts::I32Const: curr = allocator.alloc<Const>(); curr->value = Literal(getS32LEB()); break;
-      case BinaryConsts::I64Const: curr = allocator.alloc<Const>(); curr->value = Literal(getS64LEB()); break;
-      case BinaryConsts::F32Const: curr = allocator.alloc<Const>(); curr->value = Literal(getFloat32()); break;
-      case BinaryConsts::F64Const: curr = allocator.alloc<Const>(); curr->value = Literal(getFloat64()); break;
+      case BinaryConsts::I32Const:
+      case BinaryConsts::I64Const:
+      case BinaryConsts::F32Const:
+      case BinaryConsts::F64Const: break;
       default: return false;
+    }
+    curr = allocator.alloc<Const>();
+    if (opcodeEntry) {
+      curr->value = opcodeEntry->values[0];
+    } else {
+      switch (code) {
+        case BinaryConsts::I32Const: curr->value = Literal(getS32LEB()); break;
+        case BinaryConsts::I64Const: curr->value = Literal(getS64LEB()); break;
+        case BinaryConsts::F32Const: curr->value = Literal(getFloat32()); break;
+        case BinaryConsts::F64Const: curr->value = Literal(getFloat64()); break;
+        default: abort();
+      }
     }
     curr->type = curr->value.type;
     out = curr;
     if (debug) std::cerr << "zz node: Const" << std::endl;
     return true;
   }
-  bool maybeVisitUnary(Expression*& out, uint8_t code) {
+  bool maybeVisitUnary(Expression*& out, uint8_t code, OpcodeEntry* opcodeEntry) {
     Unary* curr;
     switch (code) {
       case BinaryConsts::I32Clz:         curr = allocator.alloc<Unary>(); curr->op = Clz;           curr->type = i32; break;
@@ -2228,11 +2333,12 @@ public:
       default: return false;
     }
     if (debug) std::cerr << "zz node: Unary" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table
     curr->value = popExpression();
     out = curr;
     return true;
   }
-  bool maybeVisitBinary(Expression*& out, uint8_t code) {
+  bool maybeVisitBinary(Expression*& out, uint8_t code, OpcodeEntry* opcodeEntry) {
     Binary* curr;
     #define TYPED_CODE(code) { \
       case BinaryConsts::I32##code: curr = allocator.alloc<Binary>(); curr->op = code; curr->type = i32; break; \
@@ -2285,6 +2391,7 @@ public:
       default: return false;
     }
     if (debug) std::cerr << "zz node: Binary" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table
     curr->right = popExpression();
     curr->left = popExpression();
     curr->finalize();
@@ -2294,22 +2401,28 @@ public:
     #undef INT_TYPED_CODE
     #undef FLOAT_TYPED_CODE
   }
-  void visitSelect(Select *curr) {
+  void visitSelect(Select *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Select" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table
     curr->condition = popExpression();
     curr->ifFalse = popExpression();
     curr->ifTrue = popExpression();
     curr->finalize();
   }
-  void visitReturn(Return *curr) {
+  void visitReturn(Return *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Return" << std::endl;
-    auto arity = getU32LEB();
+    int32_t arity;
+    if (opcodeEntry) {
+      arity = opcodeEntry->values[0].geti32();
+    } else {
+      arity = getU32LEB();
+    }
     assert(arity == 0 || arity == 1);
     if (arity == 1) {
       curr->value = popExpression();
     }
   }
-  bool maybeVisitHost(Expression*& out, uint8_t code) {
+  bool maybeVisitHost(Expression*& out, uint8_t code, OpcodeEntry* opcodeEntry) {
     Host* curr;
     switch (code) {
       case BinaryConsts::CurrentMemory: {
@@ -2328,15 +2441,18 @@ public:
       default: return false;
     }
     if (debug) std::cerr << "zz node: Host" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table
     curr->finalize();
     out = curr;
     return true;
   }
-  void visitNop(Nop *curr) {
+  void visitNop(Nop *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Nop" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table
   }
-  void visitUnreachable(Unreachable *curr) {
+  void visitUnreachable(Unreachable *curr, OpcodeEntry* opcodeEntry) {
     if (debug) std::cerr << "zz node: Unreachable" << std::endl;
+    assert(!opcodeEntry); // no immediates, so cannot be in opcode table
   }
 };
 
