@@ -190,17 +190,6 @@ public:
     return *this << Literal(x).reinterpreti64();
   }
 
-  // emit a general literal, assuming signed
-  BufferWithRandomAccess& operator<<(Literal& value) {
-    switch (value.type) {
-      case i32: return *this << int32_t(value.geti32());
-      case i64: return *this << int64_t(value.geti64());
-      case f32: return *this << value.getf32();
-      case f64: return *this << value.getf64();
-      default: abort();
-    }
-  }
-
   void writeAt(size_t i, uint16_t x) {
     if (debug) std::cerr << "backpatchInt16: " << x << " (at " << i << ")" << std::endl;
     (*this)[i] = x & 0xff;
@@ -1375,7 +1364,16 @@ struct OpcodeTable {
         auto& entry = entries[i];
         o << int8_t(i) << int8_t(entry.op) << int8_t(entry.size); // used index, real op index, size
         for (size_t j = 0; j < entry.size; j++) {
-          o << uint8_t(entry.values[j].type) << entry.values[j]; // FIXME: we do everything signed here
+          auto& value = entry.values[j];
+          o << uint8_t(value.type);
+          // FIXME: we do everything signed here
+          switch (value.type) {
+            case i32: o << S32LEB(value.geti32()); break;
+            case i64: o << S64LEB(value.geti64()); break;
+            case f32: o << value.getf32(); break;
+            case f64: o << value.getf64(); break;
+            default: abort();
+          }
         }
       }
     }
