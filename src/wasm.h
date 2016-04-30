@@ -212,7 +212,7 @@ public:
   float   reinterpretf32() const { assert(type == WasmType::i32); return bit_cast<float>(i32); }
   double  reinterpretf64() const { assert(type == WasmType::i64); return bit_cast<double>(i64); }
 
-  int64_t getInteger() {
+  int64_t getInteger() const {
     switch (type) {
       case WasmType::i32: return i32;
       case WasmType::i64: return i64;
@@ -220,7 +220,7 @@ public:
     }
   }
 
-  double getFloat() {
+  double getFloat() const {
     switch (type) {
       case WasmType::f32: return getf32();
       case WasmType::f64: return getf64();
