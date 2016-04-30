@@ -1207,11 +1207,17 @@ struct OpcodeEntry {
     values[1] = Literal(int32_t(y.value));
   }
 
+  // not a proper less than, just enough so we can be put in std::map. has to be *an* order, not the mathematical order
   bool unsafeLessThan(const Literal x, const Literal y) const {
     assert(x.type == y.type);
-    if (x.type == none) return false;
-    if (isWasmTypeFloat(x.type)) return x.lt(y).getInteger();
-    return x.ltU(y).getInteger();
+    switch (x.type) {
+      case none: return false;
+      case i32: return x.geti32() < y.geti32(); break;
+      case i64: return x.geti64() < y.geti64(); break;
+      case f32: return x.reinterpreti32() < y.reinterpreti32(); break;
+      case f64: return x.reinterpreti64() < y.reinterpreti64(); break;
+      default: abort();
+    }
   }
 
   bool operator<(const OpcodeEntry& other) const {
@@ -1370,8 +1376,8 @@ struct OpcodeTable {
           switch (value.type) {
             case i32: o << S32LEB(value.geti32()); break;
             case i64: o << S64LEB(value.geti64()); break;
-            case f32: o << value.getf32(); break;
-            case f64: o << value.getf64(); break;
+            case f32: o << value.reinterpreti32(); break;
+            case f64: o << value.reinterpreti64(); break;
             default: abort();
           }
         }
