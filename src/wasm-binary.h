@@ -1900,6 +1900,7 @@ public:
   void readOpcodeTable() {
     if (debug) std::cerr << "== readOpcodeTable" << std::endl;
     opcodeTable.read(this);
+    if (debug) opcodeTable.dump();
   }
 
   void readNames() {
@@ -2187,11 +2188,12 @@ public:
   void readMemoryAccess(uint32_t& alignment, size_t bytes, uint32_t& offset, OpcodeEntry* opcodeEntry) {
     if (opcodeEntry) {
       alignment = opcodeEntry->values[0].geti32();
-      offset = opcodeEntry->values[0].geti32();
+      offset = opcodeEntry->values[1].geti32();
     } else {
-      alignment = Pow2(getU32LEB());
+      alignment = getU32LEB();
       offset = getU32LEB();
     }
+    alignment = Pow2(alignment);
   }
 
   bool maybeVisitLoad(Expression*& out, uint8_t code, OpcodeEntry* opcodeEntry) {
