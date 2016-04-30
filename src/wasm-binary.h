@@ -190,6 +190,17 @@ public:
     return *this << Literal(x).reinterpreti64();
   }
 
+  // emit a general literal, assuming signed
+  BufferWithRandomAccess& operator<<(Literal& value) {
+    switch (value.type) {
+      case i32: return *this << int32_t(value.geti32());
+      case i64: return *this << int64_t(value.geti64());
+      case f32: return *this << value.getf32();
+      case f64: return *this << value.getf64();
+      default: abort();
+    }
+  }
+
   void writeAt(size_t i, uint16_t x) {
     if (debug) std::cerr << "backpatchInt16: " << x << " (at " << i << ")" << std::endl;
     (*this)[i] = x & 0xff;
@@ -231,6 +242,7 @@ namespace Section {
   auto FunctionTable = "table";
   auto Names = "name";
   auto Start = "start";
+  auto Opcodes = "opcode";
 };
 
 enum FunctionEntry {
@@ -444,10 +456,12 @@ int8_t binaryWasmType(WasmType type) {
 // Writer, emits binary
 
 class WasmBinaryWriter : public Visitor<WasmBinaryWriter, void> {
+protected:
   Module* wasm;
   BufferWithRandomAccess& o;
   bool debug;
 
+private:
   MixedArena allocator;
 
   void prepare() {
@@ -618,7 +632,7 @@ public:
     finishSection(start);
   }
 
-  void writeFunctions() {
+  virtual void writeFunctions() {
     if (wasm->functions.size() == 0) return;
     if (debug) std::cerr << "== writeFunctions" << std::endl;
     auto start = startSection(BinaryConsts::Section::Functions);
@@ -1347,6 +1361,24 @@ struct OpcodeTable {
       }
     }
   }
+
+  void write(WasmBinaryWriter* writer, BufferWithRandomAccess& o) {
+    auto start = writer->startSection(BinaryConsts::Section::Opcodes);
+    size_t numEntries = mapping.size();
+    o << int8_t(numEntries);
+    for (size_t i = 0; i < MAX_OPCODE; i++) {
+      if (used[i]) {
+        auto& entry = entries[i];
+        o << int8_t(i) << int8_t(entry.op) << int8_t(entry.size); // used index, real op index, size
+        for (size_t j = 0; j < entry.size; j++) {
+          o << entry.values[j]; // FIXME: we do everything signed here
+        }
+      }
+    }
+    writer->finishSection(start);
+  }
+
+  // TODO void read()
 };
 
 // Binary postprocessor, uses opcode table to write compressed binary
@@ -1393,7 +1425,15 @@ public:
     if (iter != opcodeTable.mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
     return WasmBinaryWriter::emitExpression(op, x, y);
   }
+
+  void writeFunctions() override {
+    if (debug) std::cerr << "== writeOpcodeTable" << std::endl;
+    opcodeTable.write(this, o);
+    WasmBinaryWriter::writeFunctions();
+  }
 };
+
+// ============================================================================
 
 // Reader, builds a wasm from binary
 
