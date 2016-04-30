@@ -1396,8 +1396,8 @@ struct OpcodeTable {
         switch (type) {
           case i32: entry.values[j] = Literal(int32_t(reader->getS32LEB())); break; // FIXME: we do everything signed here
           case i64: entry.values[j] = Literal(int64_t(reader->getS64LEB())); break;
-          case f32: entry.values[j] = Literal(reader->getFloat32()); break;
-          case f64: entry.values[j] = Literal(reader->getFloat64()); break;
+          case f32: entry.values[j] = reader->getFloat32(); break;
+          case f64: entry.values[j] = reader->getFloat64(); break;
           default: abort();
         }
       }
@@ -1552,15 +1552,16 @@ public:
     if (debug) std::cerr << "getInt64: " << ret << " ==>" << std::endl;
     return ret;
   }
-  float getFloat32() {
+  // for floating-point values, we return a literal to avoid signalling nan issues
+  Literal getFloat32() {
     if (debug) std::cerr << "<==" << std::endl;
-    auto ret = Literal(getInt32()).reinterpretf32();
+    auto ret = Literal(getInt32()).castToF32();
     if (debug) std::cerr << "getFloat32: " << ret << " ==>" << std::endl;
     return ret;
   }
-  double getFloat64() {
+  Literal getFloat64() {
     if (debug) std::cerr << "<==" << std::endl;
-    auto ret = Literal(getInt64()).reinterpretf64();
+    auto ret = Literal(getInt64()).castToF64();
     if (debug) std::cerr << "getFloat64: " << ret << " ==>" << std::endl;
     return ret;
   }
@@ -1646,14 +1647,6 @@ public:
   }
   void verifyInt64(int64_t x) {
     int64_t y = getInt64();
-    assert(x == y);
-  }
-  void verifyFloat32(float x) {
-    float y = getFloat32();
-    assert(x == y);
-  }
-  void verifyFloat64(double x) {
-    double y = getFloat64();
     assert(x == y);
   }
 
@@ -2265,8 +2258,8 @@ public:
       switch (code) {
         case BinaryConsts::I32Const: curr->value = Literal(getS32LEB()); break;
         case BinaryConsts::I64Const: curr->value = Literal(getS64LEB()); break;
-        case BinaryConsts::F32Const: curr->value = Literal(getFloat32()); break;
-        case BinaryConsts::F64Const: curr->value = Literal(getFloat64()); break;
+        case BinaryConsts::F32Const: curr->value = getFloat32(); break;
+        case BinaryConsts::F64Const: curr->value = getFloat64(); break;
         default: abort();
       }
     }
