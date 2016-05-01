@@ -27,21 +27,34 @@
 using namespace cashew;
 using namespace wasm;
 
-void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, bool debug) {
+// Optimization using opcode table and machine learning
+
+struct Choice {
+  // a choice of optimization options consists of the order of functions, and the
+  // number and sizes of function sections
+  std::vector<size_t> order;
+  std::vector<size_t> sectionSizes;
+};
+
+void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, Choice& choice, bool debug) {
   if (debug) std::cerr << "preprocess to analyze opcode usage..." << std::endl;
-  size_t num = wasm.functions.size();
-  const size_t chunk = 100;
-  std::vector<size_t> functionSectionSizes;
-  while (num > chunk) {
-    functionSectionSizes.push_back(chunk);
-    num -= chunk;
+
+  // Apply ordering from choice to the module itself, to avoid needing to have additional
+  // complexity in the writer class itself.
+  // First, save the original order on the side.
+  std::vector<Function*> originalOrder;
+  for (size_t i = 0; i < wasm.functions.size(); i++) {
+    originalOrder.push_back(wasm.functions[i].release());
   }
-  functionSectionSizes.push_back(num);
+  // Do the reordering
+  for (size_t i = 0; i < wasm.functions.size(); i++) {
+    wasm.functions[i] = std::unique_ptr<Function>(originalOrder[choice.order[i]]);
+  }
 
   std::vector<OpcodeInfo> opcodeInfos;
-  opcodeInfos.resize(functionSectionSizes.size());
+  opcodeInfos.resize(choice.sectionSizes.size());
 
-  WasmBinaryPreprocessor pre(&wasm, buffer, functionSectionSizes, opcodeInfos, debug);
+  WasmBinaryPreprocessor pre(&wasm, buffer, choice.sectionSizes, opcodeInfos, debug);
   pre.write();
   buffer.clear();
 
@@ -52,9 +65,37 @@ void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, bool 
     if (debug) opcodeTables.back().dump();
   }
   if (debug) std::cerr << "emit using opcode table..." << std::endl;
-  WasmBinaryPostprocessor post(&wasm, buffer, functionSectionSizes, opcodeTables, debug);
+  WasmBinaryPostprocessor post(&wasm, buffer, choice.sectionSizes, opcodeTables, debug);
   post.write();
+
+  // Undo reordering
+  for (size_t i = 0; i < wasm.functions.size(); i++) {
+    wasm.functions[i].release();
+    wasm.functions[i] = std::unique_ptr<Function>(originalOrder[i]);
+  }
 }
+
+// Optimize using just opcode table, no learning. Uses a reasonable choice of opt options.
+
+void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, bool debug) {
+  size_t num = wasm.functions.size();
+  Choice choice;
+  // unchanged order
+  for (size_t i = 0; i < num; i++) {
+    choice.order.push_back(i);
+  }
+  // reasonably large chunks
+  const size_t chunk = 100;
+  while (num > chunk) {
+    choice.sectionSizes.push_back(chunk);
+    num -= chunk;
+  }
+  choice.sectionSizes.push_back(num);
+  // generate using that choice
+  generateOptimizedBinary(wasm, buffer, choice, debug);
+}
+
+// main
 
 int main(int argc, const char *argv[]) {
   Options options("wasm-as", "Assemble a .wast (WebAssembly text format) into a .wasm (WebAssembly binary format)");
