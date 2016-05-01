@@ -1361,6 +1361,7 @@ struct OpcodeTable {
         order.push_back(&i.first);
       }
     }
+    if (order.size() == 0) return;
     std::sort(order.begin(), order.end(), [&info, &order](const OpcodeEntry* left, const OpcodeEntry* right) {
       size_t leftCost = info.cost(*left);
       size_t rightCost = info.cost(*right);
@@ -1369,17 +1370,29 @@ struct OpcodeTable {
       return left->op < right->op;
     });
     // fill the table, inserting entries when a code is free for use
+    clear();
     size_t next = 0;
-    for (size_t i = 0; i < MAX_OPCODE; i++) {
-      if (info.freqs[i] > 0 || next >= order.size()) {
-        used[i] = false;
-      } else {
-        used[i] = true;
-        entries[i] = *order[next];
-        mapping[entries[i]] = BinaryConsts::ASTNodes(i);
-        next++;
+    bool more;
+    do {
+      // continue to interate while there are free spots, as a spot might get freed up when we specialize an entry for it
+      more = false;
+      for (size_t i = 0; i < MAX_OPCODE; i++) {
+        if (!used[i] && info.freqs[i] == 0) {
+          used[i] = true;
+          auto& entry = entries[i] = *order[next];
+          mapping[entry] = BinaryConsts::ASTNodes(i);
+          next++;
+          if (next == order.size()) return;
+          more = true;
+          // note how much was used, and might now be free for further reuse
+          auto real = entry.op;
+          size_t usedNow = info.entries[entry];
+          assert(usedNow > 0);
+          assert(info.freqs[real] >= usedNow);
+          info.freqs[real] -= usedNow;
+        }
       }
-    }
+    } while (more);
   }
 
   void dump() {
