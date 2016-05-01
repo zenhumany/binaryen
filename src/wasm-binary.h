@@ -448,6 +448,7 @@ class WasmBinaryWriter : public Visitor<WasmBinaryWriter, void> {
 protected:
   Module* wasm;
   BufferWithRandomAccess& o;
+  std::vector<size_t>& functionSectionSizes;
   bool debug;
 
 private:
@@ -463,7 +464,15 @@ private:
   }
 
 public:
-  WasmBinaryWriter(Module* input, BufferWithRandomAccess& o, bool debug) : wasm(input), o(o), debug(debug) {
+  WasmBinaryWriter(Module* input, BufferWithRandomAccess& o, std::vector<size_t>& functionSectionSizes, bool debug) : wasm(input), o(o), functionSectionSizes(functionSectionSizes), debug(debug) {
+    if (functionSectionSizes.size() == 0) {
+      functionSectionSizes.push_back(wasm->functions.size()); // default is one chunk of all of them
+    }
+    size_t total = 0;
+    for (auto size : functionSectionSizes) {
+      total += size;
+    }
+    assert(total == wasm->functions.size());
     prepare();
   }
 
@@ -621,13 +630,25 @@ public:
     finishSection(start);
   }
 
-  virtual void writeFunctions() {
-    if (wasm->functions.size() == 0) return;
+  size_t currFunctionSection;
+
+  void writeFunctions() {
+    size_t pos = 0;
+    currFunctionSection = 0;
+    for (auto size : functionSectionSizes) {
+      writeFunctions(pos, pos + size);
+      pos += size;
+      currFunctionSection++;
+    }
+  }
+
+  virtual void writeFunctions(size_t from, size_t to) {
+    size_t total = to - from;
+    if (total == 0) return;
     if (debug) std::cerr << "== writeFunctions" << std::endl;
     auto start = startSection(BinaryConsts::Section::Functions);
-    size_t total = wasm->functions.size();
     o << U32LEB(total);
-    for (size_t i = 0; i < total; i++) {
+    for (size_t i = from; i < to; i++) {
       if (debug) std::cerr << "write one at" << o.size() << std::endl;
       size_t sizePos = writeU32LEBPlaceholder();
       size_t start = o.size();
@@ -686,7 +707,7 @@ public:
     finishSection(start);
   }
 
-  std::map<Name, uint32_t> mappedImports; // name of the Import => index
+  std::map<Name, uint32_t> mappedImports; // name of the gImport => index
   uint32_t getImportIndex(Name name) {
     if (!mappedImports.size()) {
       // Create name => index mapping. 
@@ -1274,39 +1295,41 @@ struct OpcodeInfo {
 // Binary preprocessor, emits the opcode table
 
 class WasmBinaryPreprocessor : public WasmBinaryWriter {
-  OpcodeInfo& opcodeInfo;
+  std::vector<OpcodeInfo>& opcodeInfos;
 
 public:
-  WasmBinaryPreprocessor(Module* input, BufferWithRandomAccess& o, OpcodeInfo& opcodeInfo, bool debug) : WasmBinaryWriter(input, o, debug), opcodeInfo(opcodeInfo) {}
+  WasmBinaryPreprocessor(Module* input, BufferWithRandomAccess& o, std::vector<size_t>& functionSectionSizes, std::vector<OpcodeInfo>& opcodeInfos, bool debug) : WasmBinaryWriter(input, o, functionSectionSizes, debug), opcodeInfos(opcodeInfos) {
+    assert(opcodeInfos.size() == functionSectionSizes.size());
+  }
 
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op) override {
-    opcodeInfo.record(OpcodeEntry(op));
+    opcodeInfos[currFunctionSection].record(OpcodeEntry(op));
     return WasmBinaryWriter::emitExpression(op);
   }
 
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, U32LEB x) override {
-    opcodeInfo.record(OpcodeEntry(op, x));
+    opcodeInfos[currFunctionSection].record(OpcodeEntry(op, x));
     return WasmBinaryWriter::emitExpression(op, x);
   }
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, S32LEB x) override {
-    opcodeInfo.record(OpcodeEntry(op, x));
+    opcodeInfos[currFunctionSection].record(OpcodeEntry(op, x));
     return WasmBinaryWriter::emitExpression(op, x);
   }
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, S64LEB x) override {
-    opcodeInfo.record(OpcodeEntry(op, x));
+    opcodeInfos[currFunctionSection].record(OpcodeEntry(op, x));
     return WasmBinaryWriter::emitExpression(op, x);
   }
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, float x) override {
-    opcodeInfo.record(OpcodeEntry(op, x));
+    opcodeInfos[currFunctionSection].record(OpcodeEntry(op, x));
     return WasmBinaryWriter::emitExpression(op, x);
   }
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, double x) override {
-    opcodeInfo.record(OpcodeEntry(op, x));
+    opcodeInfos[currFunctionSection].record(OpcodeEntry(op, x));
     return WasmBinaryWriter::emitExpression(op, x);
   }
 
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, U32LEB x, U32LEB y) override {
-    opcodeInfo.record(OpcodeEntry(op, x, y));
+    opcodeInfos[currFunctionSection].record(OpcodeEntry(op, x, y));
     return WasmBinaryWriter::emitExpression(op, x, y);
   }
 };
@@ -1319,7 +1342,15 @@ struct OpcodeTable {
   std::map<OpcodeEntry, BinaryConsts::ASTNodes> mapping; // opcode entry => the code it uses, reverse of entries
 
   OpcodeTable() {
-    memset(used, 0, sizeof(used));
+    clear();
+  }
+
+  void clear() {
+    for (size_t i = 0; i < MAX_OPCODE; i++) {
+      used[i] = false;
+      entries[i] = OpcodeEntry();
+    }
+    mapping.clear();
   }
 
   OpcodeTable(OpcodeInfo& info) {
@@ -1414,52 +1445,54 @@ struct OpcodeTable {
 // Binary postprocessor, uses opcode table to write compressed binary
 
 class WasmBinaryPostprocessor : public WasmBinaryWriter {
-  OpcodeTable& opcodeTable;
+  std::vector<OpcodeTable>& opcodeTables;
 
 public:
-  WasmBinaryPostprocessor(Module* input, BufferWithRandomAccess& o, OpcodeTable& opcodeTable, bool debug) : WasmBinaryWriter(input, o, debug), opcodeTable(opcodeTable) {}
+  WasmBinaryPostprocessor(Module* input, BufferWithRandomAccess& o, std::vector<size_t>& functionSectionSizes, std::vector<OpcodeTable>& opcodeTables, bool debug) : WasmBinaryWriter(input, o, functionSectionSizes, debug), opcodeTables(opcodeTables) {
+    assert(opcodeTables.size() == functionSectionSizes.size());
+  }
 
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op) override {
-    assert(!opcodeTable.used[op]); // if no immediates, should be original opcode
+    assert(!opcodeTables[currFunctionSection].used[op]); // if no immediates, should be original opcode
     return WasmBinaryWriter::emitExpression(op);
   }
 
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, U32LEB x) override {
-    auto iter = opcodeTable.mapping.find(OpcodeEntry(op, x));
-    if (iter != opcodeTable.mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
+    auto iter = opcodeTables[currFunctionSection].mapping.find(OpcodeEntry(op, x));
+    if (iter != opcodeTables[currFunctionSection].mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
     return WasmBinaryWriter::emitExpression(op, x);
   }
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, S32LEB x) override {
-    auto iter = opcodeTable.mapping.find(OpcodeEntry(op, x));
-    if (iter != opcodeTable.mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
+    auto iter = opcodeTables[currFunctionSection].mapping.find(OpcodeEntry(op, x));
+    if (iter != opcodeTables[currFunctionSection].mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
     return WasmBinaryWriter::emitExpression(op, x);
   }
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, S64LEB x) override {
-    auto iter = opcodeTable.mapping.find(OpcodeEntry(op, x));
-    if (iter != opcodeTable.mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
+    auto iter = opcodeTables[currFunctionSection].mapping.find(OpcodeEntry(op, x));
+    if (iter != opcodeTables[currFunctionSection].mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
     return WasmBinaryWriter::emitExpression(op, x);
   }
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, float x) override {
-    auto iter = opcodeTable.mapping.find(OpcodeEntry(op, x));
-    if (iter != opcodeTable.mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
+    auto iter = opcodeTables[currFunctionSection].mapping.find(OpcodeEntry(op, x));
+    if (iter != opcodeTables[currFunctionSection].mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
     return WasmBinaryWriter::emitExpression(op, x);
   }
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, double x) override {
-    auto iter = opcodeTable.mapping.find(OpcodeEntry(op, x));
-    if (iter != opcodeTable.mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
+    auto iter = opcodeTables[currFunctionSection].mapping.find(OpcodeEntry(op, x));
+    if (iter != opcodeTables[currFunctionSection].mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
     return WasmBinaryWriter::emitExpression(op, x);
   }
 
   BufferWithRandomAccess& emitExpression(BinaryConsts::ASTNodes op, U32LEB x, U32LEB y) override {
-    auto iter = opcodeTable.mapping.find(OpcodeEntry(op, x, y));
-    if (iter != opcodeTable.mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
+    auto iter = opcodeTables[currFunctionSection].mapping.find(OpcodeEntry(op, x, y));
+    if (iter != opcodeTables[currFunctionSection].mapping.end()) return WasmBinaryWriter::emitExpression(iter->second); // just return the compressed opcode
     return WasmBinaryWriter::emitExpression(op, x, y);
   }
 
-  void writeFunctions() override {
+  void writeFunctions(size_t from, size_t to) override {
     if (debug) std::cerr << "== writeOpcodeTable" << std::endl;
-    opcodeTable.write(this, o);
-    WasmBinaryWriter::writeFunctions();
+    opcodeTables[currFunctionSection].write(this, o);
+    WasmBinaryWriter::writeFunctions(from, to);
   }
 };
 
@@ -1753,7 +1786,8 @@ public:
   void readFunctions() {
     if (debug) std::cerr << "== readFunctions" << std::endl;
     size_t total = getU32LEB();
-    for (size_t i = 0; i < total; i++) {
+    size_t before = functions.size();
+    for (size_t i = before; i < before + total; i++) {
       if (debug) std::cerr << "read one at " << pos << std::endl;
       size_t size = getU32LEB();
       assert(size > 0);
@@ -1905,6 +1939,7 @@ public:
 
   void readOpcodeTable() {
     if (debug) std::cerr << "== readOpcodeTable" << std::endl;
+    opcodeTable.clear();
     opcodeTable.read(this);
     if (debug) opcodeTable.dump();
   }

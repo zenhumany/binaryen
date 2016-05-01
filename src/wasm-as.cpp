@@ -57,21 +57,36 @@ int main(int argc, const char *argv[]) {
   SExpressionWasmBuilder builder(wasm, *root[0], [&]() { abort(); });
 
   if (options.debug) std::cerr << "binarification..." << std::endl;
+  std::vector<size_t> functionSectionSizes;
   BufferWithRandomAccess buffer(options.debug);
   if (options.extra.count("optimize") == 0) {
-    WasmBinaryWriter writer(&wasm, buffer, options.debug);
+    WasmBinaryWriter writer(&wasm, buffer, functionSectionSizes, options.debug);
     writer.write();
   } else {
     if (options.debug) std::cerr << "preprocess to analyze opcode usage..." << std::endl;
-    OpcodeInfo opcodeInfo;
-    WasmBinaryPreprocessor pre(&wasm, buffer, opcodeInfo, options.debug);
+    size_t num = wasm.functions.size();
+    const size_t chunk = 100;
+    while (num > chunk) {
+      functionSectionSizes.push_back(chunk);
+      num -= chunk;
+    }
+    functionSectionSizes.push_back(num);
+
+    std::vector<OpcodeInfo> opcodeInfos;
+    opcodeInfos.resize(functionSectionSizes.size());
+
+    WasmBinaryPreprocessor pre(&wasm, buffer, functionSectionSizes, opcodeInfos, options.debug);
     pre.write();
     buffer.clear();
+
     if (options.debug) std::cerr << "generate opcode table..." << std::endl;
-    OpcodeTable opcodeTable(opcodeInfo);
-    if (options.debug) opcodeTable.dump();
+    std::vector<OpcodeTable> opcodeTables;
+    for (auto& info : opcodeInfos) {
+      opcodeTables.emplace_back(info);
+      if (options.debug) opcodeTables.back().dump();
+    }
     if (options.debug) std::cerr << "emit using opcode table..." << std::endl;
-    WasmBinaryPostprocessor post(&wasm, buffer, opcodeTable, options.debug);
+    WasmBinaryPostprocessor post(&wasm, buffer, functionSectionSizes, opcodeTables, options.debug);
     post.write();
   }
 
