@@ -62,15 +62,15 @@ int main(int argc, const char *argv[]) {
     WasmBinaryWriter writer(&wasm, buffer, options.debug);
     writer.write();
   } else {
-    // preprocess to find optimal opcode table
+    if (options.debug) std::cerr << "preprocess to analyze opcode usage..." << std::endl;
     OpcodeInfo opcodeInfo;
     WasmBinaryPreprocessor pre(&wasm, buffer, opcodeInfo, options.debug);
     pre.write();
     buffer.clear();
-    // optimize
+    if (options.debug) std::cerr << "generate opcode table..." << std::endl;
     OpcodeTable opcodeTable(opcodeInfo);
     if (options.debug) opcodeTable.dump();
-    // emit using opcode table
+    if (options.debug) std::cerr << "emit using opcode table..." << std::endl;
     WasmBinaryPostprocessor post(&wasm, buffer, opcodeTable, options.debug);
     post.write();
   }
