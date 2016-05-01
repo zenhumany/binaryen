@@ -27,6 +27,35 @@
 using namespace cashew;
 using namespace wasm;
 
+void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, bool debug) {
+  if (debug) std::cerr << "preprocess to analyze opcode usage..." << std::endl;
+  size_t num = wasm.functions.size();
+  const size_t chunk = 100;
+  std::vector<size_t> functionSectionSizes;
+  while (num > chunk) {
+    functionSectionSizes.push_back(chunk);
+    num -= chunk;
+  }
+  functionSectionSizes.push_back(num);
+
+  std::vector<OpcodeInfo> opcodeInfos;
+  opcodeInfos.resize(functionSectionSizes.size());
+
+  WasmBinaryPreprocessor pre(&wasm, buffer, functionSectionSizes, opcodeInfos, debug);
+  pre.write();
+  buffer.clear();
+
+  if (debug) std::cerr << "generate opcode table..." << std::endl;
+  std::vector<OpcodeTable> opcodeTables;
+  for (auto& info : opcodeInfos) {
+    opcodeTables.emplace_back(info);
+    if (debug) opcodeTables.back().dump();
+  }
+  if (debug) std::cerr << "emit using opcode table..." << std::endl;
+  WasmBinaryPostprocessor post(&wasm, buffer, functionSectionSizes, opcodeTables, debug);
+  post.write();
+}
+
 int main(int argc, const char *argv[]) {
   Options options("wasm-as", "Assemble a .wast (WebAssembly text format) into a .wasm (WebAssembly binary format)");
   options.add("--output", "-o", "Output file (stdout if not specified)",
@@ -57,37 +86,13 @@ int main(int argc, const char *argv[]) {
   SExpressionWasmBuilder builder(wasm, *root[0], [&]() { abort(); });
 
   if (options.debug) std::cerr << "binarification..." << std::endl;
-  std::vector<size_t> functionSectionSizes;
   BufferWithRandomAccess buffer(options.debug);
   if (options.extra.count("optimize") == 0) {
+    std::vector<size_t> functionSectionSizes;
     WasmBinaryWriter writer(&wasm, buffer, functionSectionSizes, options.debug);
     writer.write();
   } else {
-    if (options.debug) std::cerr << "preprocess to analyze opcode usage..." << std::endl;
-    size_t num = wasm.functions.size();
-    const size_t chunk = 100;
-    while (num > chunk) {
-      functionSectionSizes.push_back(chunk);
-      num -= chunk;
-    }
-    functionSectionSizes.push_back(num);
-
-    std::vector<OpcodeInfo> opcodeInfos;
-    opcodeInfos.resize(functionSectionSizes.size());
-
-    WasmBinaryPreprocessor pre(&wasm, buffer, functionSectionSizes, opcodeInfos, options.debug);
-    pre.write();
-    buffer.clear();
-
-    if (options.debug) std::cerr << "generate opcode table..." << std::endl;
-    std::vector<OpcodeTable> opcodeTables;
-    for (auto& info : opcodeInfos) {
-      opcodeTables.emplace_back(info);
-      if (options.debug) opcodeTables.back().dump();
-    }
-    if (options.debug) std::cerr << "emit using opcode table..." << std::endl;
-    WasmBinaryPostprocessor post(&wasm, buffer, functionSectionSizes, opcodeTables, options.debug);
-    post.write();
+    generateOptimizedBinary(wasm, buffer, options.debug);
   }
 
   if (options.debug) std::cerr << "writing to output..." << std::endl;
