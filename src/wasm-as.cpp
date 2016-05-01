@@ -21,6 +21,7 @@
 #include "support/colors.h"
 #include "support/command-line.h"
 #include "support/file.h"
+#include "support/learning.h"
 #include "wasm-binary.h"
 #include "wasm-s-parser.h"
 
@@ -34,6 +35,35 @@ struct Choice {
   // number and sizes of function sections
   std::vector<size_t> order;
   std::vector<size_t> sectionSizes;
+
+  int32_t getFitness() { return fitness; }
+
+  void setFitness(int32_t f) {
+    fitness = f;
+  }
+
+  void verify() {
+    // verify
+    size_t total = 0;
+    for (auto size : sectionSizes) {
+      total += size;
+    }
+    assert(total == order.size());
+  }
+
+  void dump() {
+    std::cerr << "Choice [on " << order.size() << " funcs, fitness=" << fitness << "]:\n";
+    for (size_t i = 0; i < order.size(); i++) {
+      std::cerr << "  order[" << i << "] = " << order[i] << '\n';
+    }
+    for (size_t i = 0; i < sectionSizes.size(); i++) {
+      std::cerr << "  sectionSizes[" << i << "] = " << sectionSizes[i] << '\n';
+    }
+  }
+
+private:
+  // when learning, we will have our fitness calculated
+  int32_t fitness;
 };
 
 void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, Choice& choice, bool debug) {
@@ -63,6 +93,7 @@ void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, Choic
   for (auto& info : opcodeInfos) {
     opcodeTables.emplace_back(info);
     if (debug) opcodeTables.back().dump();
+    // XXX opcodeTables.back().dump();
   }
   if (debug) std::cerr << "emit using opcode table..." << std::endl;
   WasmBinaryPostprocessor post(&wasm, buffer, choice.sectionSizes, opcodeTables, debug);
@@ -72,6 +103,107 @@ void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, Choic
   for (size_t i = 0; i < wasm.functions.size(); i++) {
     wasm.functions[i].release();
     wasm.functions[i] = std::unique_ptr<Function>(originalOrder[i]);
+  }
+}
+
+// Generates elements to be learned on
+
+struct Generator {
+  Generator(Module& wasm, bool debug = false) : wasm(wasm), size(wasm.functions.size()), debug(debug) {}
+
+  Choice* makeRandom() {
+    auto* ret = new Choice();
+    // shuffle the functions
+    for (size_t i = 0; i < size; i++) ret->order.push_back(i);
+    std::random_shuffle(ret->order.begin(), ret->order.end());
+    // pick the number of function sections TODO: mean should be much smaller
+    size_t num = std::max(rand() % size, 1U);
+    // to get a uniform distribution of section sizes, randomly place markers
+    // a marker means, "when you reach this, after it is a new section"
+    std::vector<size_t> markers;
+    for (size_t i = 0; i < num; i++) markers.push_back(rand() % size);
+    std::sort(markers.begin(), markers.end());
+    markers.push_back(size + 1); // buffer at the end, so we don't need to bounds check
+    size_t currSectionSize = 0, nextMarker = 0;
+    for (size_t i = 0; i < size; i++) {
+      currSectionSize++;
+      if (markers[nextMarker] <= i) { // may be less due to duplicates, we handle one per iter intentionally, so sections are not empty
+        ret->sectionSizes.push_back(currSectionSize);
+        currSectionSize = 0;
+        nextMarker++;
+      }
+    }
+    if (currSectionSize > 0) { // final section
+      ret->sectionSizes.push_back(currSectionSize);
+    }
+    calcFitness(*ret);
+    return ret;
+  }
+
+  void addSectionIndexes(Choice* choice, std::vector<size_t>& indexes) {
+    size_t curr = 0;
+    for (size_t s = 0; s < choice->sectionSizes.size(); s++) {
+      auto sectionSize = choice->sectionSizes[s];
+      for (size_t i = 0; i < sectionSize; i++) {
+        indexes[choice->order[curr++]] += s;
+      }
+    }
+    assert(curr == size);
+  }
+
+  Choice* makeMixture(Choice* left, Choice* right) {
+    auto* ret = new Choice();
+    // Ideally, we should mix using the distance between each pair of functions, as
+    // what really matters here is which functions end up together. However, that
+    // would be quadratic. Instead, approximate by averaging section indexes.
+    std::vector<size_t> merged; // function index => section index
+    merged.resize(size);
+    addSectionIndexes(left, merged);
+    addSectionIndexes(right, merged);
+    std::vector<std::vector<size_t>> sectionIndexes; // index => list of all functions in that section
+    sectionIndexes.resize(std::max(left->sectionSizes.size(), right->sectionSizes.size()));
+    // use the order from one of them. TODO: perhaps we should use both?
+    auto* mixer = rand() & 1 ? left : right;
+    for (size_t i = 0; i < size; i++) {
+      auto functionIndex = mixer->order[i];
+      auto sectionIndex = merged[functionIndex] /= 2; // really silly, but at least keeps functions together that were together
+      sectionIndexes[sectionIndex].push_back(functionIndex);
+    }
+    // write out the sections and order
+    for (auto& indexes : sectionIndexes) {
+      if (indexes.size() == 0) continue; // don't emit empty sections
+      for (size_t i : indexes) {
+        ret->order.push_back(i);
+      }
+      ret->sectionSizes.push_back(indexes.size());
+    }
+    calcFitness(*ret);
+    return ret;
+  }
+
+private:
+  Module& wasm;
+  size_t size;
+  bool debug;
+
+  void calcFitness(Choice& choice) {
+    //choice.dump();
+    choice.verify();
+    // generate a wasm binary with the specified choice, the size indicates the fitness
+    BufferWithRandomAccess buffer(debug);
+    generateOptimizedBinary(wasm, buffer, choice, debug);
+    choice.setFitness(-buffer.size()); // more is better in fitness
+  }
+};
+
+void generateOptimizedBinaryUsingLearning(Module& wasm, BufferWithRandomAccess& buffer, bool debug) {
+  Generator generator(wasm, debug);
+  GeneticLearner<Choice, int32_t, Generator> learner(generator, 100);
+  size_t i = 0;
+  std::cerr << "initial top fitness: " << learner.getBest()->getFitness() << '\n';
+  while (1) {
+    learner.runGeneration();
+    std::cerr << (i++) << ": top fitness: " << learner.getBest()->getFitness() << '\n';
   }
 }
 
@@ -133,7 +265,7 @@ int main(int argc, const char *argv[]) {
     WasmBinaryWriter writer(&wasm, buffer, functionSectionSizes, options.debug);
     writer.write();
   } else {
-    generateOptimizedBinary(wasm, buffer, options.debug);
+    generateOptimizedBinaryUsingLearning(wasm, buffer, options.debug);
   }
 
   if (options.debug) std::cerr << "writing to output..." << std::endl;
