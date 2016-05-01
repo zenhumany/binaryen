@@ -208,29 +208,30 @@ def split_wast(wast):
 def binary_format_check(wast, verify_final_result=True):
   # checks we can convert the wast to binary and back
 
-  print '     (binary format check)'
-  cmd = [os.path.join('bin', 'wasm-as'), wast, '-o', 'a.wasm']
-  print '      ', ' '.join(cmd)
-  if os.path.exists('a.wasm'): os.unlink('a.wasm')
-  subprocess.check_call(cmd, stdout=subprocess.PIPE)
-  assert os.path.exists('a.wasm')
+  for opts in [[], ['-O']]: # check both unoptimized and optimized binaries
+    print '     (binary format check)'
+    cmd = [os.path.join('bin', 'wasm-as'), wast, '-o', 'a.wasm'] + opts
+    print '      ', ' '.join(cmd)
+    if os.path.exists('a.wasm'): os.unlink('a.wasm')
+    subprocess.check_call(cmd, stdout=subprocess.PIPE)
+    assert os.path.exists('a.wasm')
 
-  cmd = [os.path.join('bin', 'wasm-dis'), 'a.wasm', '-o', 'ab.wast']
-  print '      ', ' '.join(cmd)
-  if os.path.exists('ab.wast'): os.unlink('ab.wast')
-  subprocess.check_call(cmd, stdout=subprocess.PIPE)
-  assert os.path.exists('ab.wast')
+    cmd = [os.path.join('bin', 'wasm-dis'), 'a.wasm', '-o', 'ab.wast']
+    print '      ', ' '.join(cmd)
+    if os.path.exists('ab.wast'): os.unlink('ab.wast')
+    subprocess.check_call(cmd, stdout=subprocess.PIPE)
+    assert os.path.exists('ab.wast')
 
-  # make sure it is a valid wast
-  cmd = [os.path.join('bin', 'binaryen-shell'), 'ab.wast']
-  print '      ', ' '.join(cmd)
-  subprocess.check_call(cmd, stdout=subprocess.PIPE)
+    # make sure it is a valid wast
+    cmd = [os.path.join('bin', 'binaryen-shell'), 'ab.wast']
+    print '      ', ' '.join(cmd)
+    subprocess.check_call(cmd, stdout=subprocess.PIPE)
 
-  if verify_final_result:
-    expected = open(wast + '.fromBinary').read()
-    actual = open('ab.wast').read()
-    if actual != expected:
-      fail(actual, expected)
+    if verify_final_result:
+      expected = open(wast + '.fromBinary').read()
+      actual = open('ab.wast').read()
+      if actual != expected:
+        fail(actual, expected)
 
   return 'ab.wast'
 
