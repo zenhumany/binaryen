@@ -222,16 +222,16 @@ void generateOptimizedBinaryUsingLearning(Module& wasm, BufferWithRandomAccess& 
     }
     choice.sectionSizes.push_back(wasm.functions.size());
     generateOptimizedBinary(wasm, buffer, choice, false);
-    std::cerr << "optimzied with no opt tweaks: " << buffer.size() << '\n';
+    std::cerr << "optimized with just one function section / one opcoe table: " << buffer.size() << '\n';
   }
 
   Generator generator(wasm, debug);
   GeneticLearner<Choice, int32_t, Generator> learner(generator, 100);
   size_t i = 0;
-  std::cerr << "initial top fitness: " << -learner.getBest()->getFitness() << '\n';
+  std::cerr << "*: top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
   while (1) {
     learner.runGeneration();
-    std::cerr << (i++) << ": top fitness: " << -learner.getBest()->getFitness() << '\n';
+    std::cerr << (i++) << ": top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
   }
 }
 

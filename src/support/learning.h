@@ -82,8 +82,8 @@ public:
     size_t size = population.size();
 
     // we have a mix of promoted from the last generation, mixed from the last generation, and random
-    const size_t promoted = size / 10;
-    const size_t mixed = size / 80;
+    const size_t promoted = (25 * size) / 100;
+    const size_t mixed = (50 * size) / 100;
 
     // promoted just stay in place
     // mixtures are computed, then added back in (as we still need them as we work)
