@@ -116,8 +116,16 @@ struct Generator {
     // shuffle the functions
     for (size_t i = 0; i < size; i++) ret->order.push_back(i);
     std::random_shuffle(ret->order.begin(), ret->order.end());
-    // pick the number of function sections TODO: mean should be much smaller
-    size_t num = std::max(rand() % size, 1U);
+    // pick the number of function sections
+    size_t num;
+    if (rand() & 32) {
+      num = std::max(rand() % size, 1U); // all possible sizes
+    } else if (rand() & 16) {
+      num = std::max(std::min(std::min(rand() % size, rand() % size), std::min(rand() % size, rand() % size)), 1U); // conservative small size
+    } else {
+      num = std::min(size, 1U + rand() % 8); // absolute small size
+    }
+    //std::cerr << "num sections " << num << " / " << size << '\n';
     // to get a uniform distribution of section sizes, randomly place markers
     // a marker means, "when you reach this, after it is a new section"
     std::vector<size_t> markers;
@@ -197,13 +205,33 @@ private:
 };
 
 void generateOptimizedBinaryUsingLearning(Module& wasm, BufferWithRandomAccess& buffer, bool debug) {
+  {
+    // emit a baseline
+    BufferWithRandomAccess buffer(debug);
+    std::vector<size_t> functionSectionSizes;
+    WasmBinaryWriter writer(&wasm, buffer, functionSectionSizes, debug);
+    writer.write();
+    std::cerr << "unoptimzied size: " << buffer.size() << '\n';
+  }
+  {
+    // emit a baseline opt
+    BufferWithRandomAccess buffer(debug);
+    Choice choice;
+    for (size_t i = 0; i < wasm.functions.size(); i++) {
+      choice.order.push_back(i);
+    }
+    choice.sectionSizes.push_back(wasm.functions.size());
+    generateOptimizedBinary(wasm, buffer, choice, false);
+    std::cerr << "optimzied with no opt tweaks: " << buffer.size() << '\n';
+  }
+
   Generator generator(wasm, debug);
   GeneticLearner<Choice, int32_t, Generator> learner(generator, 100);
   size_t i = 0;
-  std::cerr << "initial top fitness: " << learner.getBest()->getFitness() << '\n';
+  std::cerr << "initial top fitness: " << -learner.getBest()->getFitness() << '\n';
   while (1) {
     learner.runGeneration();
-    std::cerr << (i++) << ": top fitness: " << learner.getBest()->getFitness() << '\n';
+    std::cerr << (i++) << ": top fitness: " << -learner.getBest()->getFitness() << '\n';
   }
 }
 
