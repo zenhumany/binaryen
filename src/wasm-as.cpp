@@ -28,6 +28,12 @@
 using namespace cashew;
 using namespace wasm;
 
+void generateBinary(Module& wasm, BufferWithRandomAccess& buffer, bool debug) {
+  std::vector<size_t> functionSectionSizes;
+  WasmBinaryWriter writer(&wasm, buffer, functionSectionSizes, debug);
+  writer.write();
+}
+
 // Optimization using opcode table and machine learning
 
 struct Choice {
@@ -109,7 +115,9 @@ void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, Choic
 // Generates elements to be learned on
 
 struct Generator {
-  Generator(Module& wasm, bool debug = false) : wasm(wasm), size(wasm.functions.size()), debug(debug) {}
+  Generator(Module& wasm, bool debug = false) : wasm(wasm), size(wasm.functions.size()), debug(debug) {
+    assert(size > 0);
+  }
 
   Choice* makeRandom() {
     auto* ret = new Choice();
@@ -205,7 +213,12 @@ private:
 };
 
 void generateOptimizedBinaryUsingLearning(Module& wasm, BufferWithRandomAccess& buffer, bool debug) {
-  {
+  if (wasm.functions.size() == 0) {
+    generateBinary(wasm, buffer, debug);
+    return;
+  }
+
+  if (debug) {
     // emit a baseline
     BufferWithRandomAccess buffer(debug);
     std::vector<size_t> functionSectionSizes;
@@ -213,7 +226,7 @@ void generateOptimizedBinaryUsingLearning(Module& wasm, BufferWithRandomAccess& 
     writer.write();
     std::cerr << "unoptimzied size: " << buffer.size() << '\n';
   }
-  {
+  if (debug) {
     // emit a baseline opt
     BufferWithRandomAccess buffer(debug);
     Choice choice;
@@ -226,13 +239,15 @@ void generateOptimizedBinaryUsingLearning(Module& wasm, BufferWithRandomAccess& 
   }
 
   Generator generator(wasm, debug);
-  GeneticLearner<Choice, int32_t, Generator> learner(generator, 100);
-  size_t i = 0;
-  std::cerr << "*: top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
-  while (1) {
+  GeneticLearner<Choice, int32_t, Generator> learner(generator, 20); // 100?
+  if (debug) std::cerr << "*: top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
+  const int NUM_GENERATIONS = 1;
+  for (int i = 0; i < NUM_GENERATIONS; i++) {
     learner.runGeneration();
-    std::cerr << (i++) << ": top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
+    if (debug) std::cerr << (i++) << ": top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
   }
+  // emit final binary using optimal choice seen
+  generateOptimizedBinary(wasm, buffer, *learner.getBest(), debug);
 }
 
 // Optimize using just opcode table, no learning. Uses a reasonable choice of opt options.
@@ -289,9 +304,7 @@ int main(int argc, const char *argv[]) {
   if (options.debug) std::cerr << "binarification..." << std::endl;
   BufferWithRandomAccess buffer(options.debug);
   if (options.extra.count("optimize") == 0) {
-    std::vector<size_t> functionSectionSizes;
-    WasmBinaryWriter writer(&wasm, buffer, functionSectionSizes, options.debug);
-    writer.write();
+    generateBinary(wasm, buffer, options.debug);
   } else {
     generateOptimizedBinaryUsingLearning(wasm, buffer, options.debug);
   }
