@@ -1377,12 +1377,14 @@ struct OpcodeTable {
       // continue to interate while there are free spots, as a spot might get freed up when we specialize an entry for it
       more = false;
       for (size_t i = 0; i < MAX_OPCODE; i++) {
-        if (!used[i] && info.freqs[i] == 0) {
-          used[i] = true;
-          auto& entry = entries[i] = *order[next];
-          mapping[entry] = BinaryConsts::ASTNodes(i);
+        if (!used[i] && info.freqs[i] == 0 && next < order.size()) {
+          auto& entry = *order[next];
           next++;
-          if (next == order.size()) return;
+          size_t costInTable = 2 + (1 * entry.size); // 2 bytes for real op and used op, and at least 1 per immediate
+          if (info.cost(entry) <= costInTable) continue; // not worth it, skip
+          used[i] = true;
+          entries[i] = entry;
+          mapping[entry] = BinaryConsts::ASTNodes(i);
           more = true;
           // note how much was used, and might now be free for further reuse
           auto real = entry.op;
