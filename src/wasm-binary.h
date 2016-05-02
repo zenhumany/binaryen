@@ -1354,6 +1354,7 @@ struct OpcodeTable {
   }
 
   OpcodeTable(OpcodeInfo& info) {
+    clear();
     // sort by cost
     std::vector<const OpcodeEntry*> order;
     for (const auto& i : info.entries) {
@@ -1370,7 +1371,6 @@ struct OpcodeTable {
       return left->op < right->op;
     });
     // fill the table, inserting entries when a code is free for use
-    clear();
     size_t next = 0;
     bool more;
     do {
