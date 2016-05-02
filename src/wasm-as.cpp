@@ -126,10 +126,11 @@ struct Generator {
     std::random_shuffle(ret->order.begin(), ret->order.end());
     // pick the number of function sections
     size_t num;
-    if (rand() & 32) {
+    size_t r = rand() % 100;
+    if (r < 20) {
       num = std::max(rand() % size, 1U); // all possible sizes
-    } else if (rand() & 16) {
-      num = std::max(std::min(std::min(rand() % size, rand() % size), std::min(rand() % size, rand() % size)), 1U); // conservative small size
+    } else if (r < 80) {
+      num = std::max(std::min(rand() % size, rand() % size), 1U); // conservative small size
     } else {
       num = std::min(size, 1U + rand() % 8); // absolute small size
     }
@@ -234,17 +235,28 @@ void generateOptimizedBinaryUsingLearning(Module& wasm, BufferWithRandomAccess& 
       choice.order.push_back(i);
     }
     choice.sectionSizes.push_back(wasm.functions.size());
-    generateOptimizedBinary(wasm, buffer, choice, false);
-    std::cerr << "optimized with just one function section / one opcoe table: " << buffer.size() << '\n';
+    generateOptimizedBinary(wasm, buffer, choice, debug);
+    std::cerr << "optimized with just one function section / one opcode table: " << buffer.size() << '\n';
+  }
+  if (debug) {
+    // emit a baseline table per function
+    BufferWithRandomAccess buffer(debug);
+    Choice choice;
+    for (size_t i = 0; i < wasm.functions.size(); i++) {
+      choice.order.push_back(i);
+      choice.sectionSizes.push_back(1);
+    }
+    generateOptimizedBinary(wasm, buffer, choice, debug);
+    std::cerr << "optimized with one function section /  opcode table per function: " << buffer.size() << '\n';
   }
 
   Generator generator(wasm, debug);
-  GeneticLearner<Choice, int32_t, Generator> learner(generator, 20); // 100?
+  GeneticLearner<Choice, int32_t, Generator> learner(generator, 50); // 100?
   if (debug) std::cerr << "*: top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
   const int NUM_GENERATIONS = 1;
   for (int i = 0; i < NUM_GENERATIONS; i++) {
     learner.runGeneration();
-    if (debug) std::cerr << (i++) << ": top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
+    if (debug) std::cerr << i << ": top fitness: " << -learner.getBest()->getFitness() << " [" << learner.getBest()->sectionSizes.size() << " sections]\n";
   }
   // emit final binary using optimal choice seen
   generateOptimizedBinary(wasm, buffer, *learner.getBest(), debug);

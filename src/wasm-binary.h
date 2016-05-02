@@ -1202,7 +1202,7 @@ const auto MAX_OPCODE = 256;
 
 struct OpcodeEntry {
   BinaryConsts::ASTNodes op; // the true opcode
-  size_t size;
+  uint8_t size;
   Literal values[MAX_IMMEDIATES];
 
   OpcodeEntry() : op(BinaryConsts::Invalid) {}
@@ -1380,16 +1380,15 @@ struct OpcodeTable {
         if (!used[i] && info.freqs[i] == 0 && next < order.size()) {
           auto& entry = *order[next];
           next++;
-          size_t costInTable = 2 + (1 * entry.size); // 2 bytes for real op and used op, and at least 1 per immediate
-          if (info.cost(entry) <= costInTable) continue; // not worth it, skip
+          size_t usedNow = info.entries[entry];
+          assert(usedNow > 0);
+          if (usedNow < 2) continue; // not worth it, skip
           used[i] = true;
           entries[i] = entry;
           mapping[entry] = BinaryConsts::ASTNodes(i);
           more = true;
           // note how much was used, and might now be free for further reuse
           auto real = entry.op;
-          size_t usedNow = info.entries[entry];
-          assert(usedNow > 0);
           assert(info.freqs[real] >= usedNow);
           info.freqs[real] -= usedNow;
         }
