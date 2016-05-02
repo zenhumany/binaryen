@@ -128,11 +128,11 @@ struct Generator {
     size_t num;
     size_t r = rand() % 100;
     if (r < 20) {
-      num = std::max(rand() % size, 1U); // all possible sizes
+      num = std::max(size_t(rand() % size), size_t(1)); // all possible sizes
     } else if (r < 80) {
-      num = std::max(std::min(rand() % size, rand() % size), 1U); // conservative small size
+      num = std::max(std::min(size_t(rand() % size), size_t(rand() % size)), size_t(1)); // conservative small size
     } else {
-      num = std::min(size, 1U + rand() % 8); // absolute small size
+      num = std::min(size, size_t(1 + rand() % 8)); // absolute small size
     }
     //std::cerr << "num sections " << num << " / " << size << '\n';
     // to get a uniform distribution of section sizes, randomly place markers
