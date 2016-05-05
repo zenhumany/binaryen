@@ -271,13 +271,14 @@ void generateOptimizedBinary(Module& wasm, BufferWithRandomAccess& buffer, bool 
   for (size_t i = 0; i < num; i++) {
     choice.order.push_back(i);
   }
-  // reasonably large chunks
-  const size_t chunk = 100;
+  // chunkify
+  const size_t chunk = num; // TODO: small chunks, multiple tables?
   while (num > chunk) {
     choice.sectionSizes.push_back(chunk);
     num -= chunk;
   }
   choice.sectionSizes.push_back(num);
+  assert(choice.sectionSizes.size() == 1); // TODO: for now, just 1
   // generate using that choice
   generateOptimizedBinary(wasm, buffer, choice, debug);
 }
@@ -318,7 +319,8 @@ int main(int argc, const char *argv[]) {
   if (options.extra.count("optimize") == 0) {
     generateBinary(wasm, buffer, options.debug);
   } else {
-    generateOptimizedBinaryUsingLearning(wasm, buffer, options.debug);
+    // TODO: generateOptimizedBinaryUsingLearning
+    generateOptimizedBinary(wasm, buffer, options.debug);
   }
 
   if (options.debug) std::cerr << "writing to output..." << std::endl;
