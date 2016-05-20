@@ -207,7 +207,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     } else if (curr->is<Block>()) {
       return; // handled in visitBlock
     } else if (curr->is<If>()) {
-      assert(!curr->cast<If>()->ifFalse); // if-elses are handled by doNoteIfElse* methods
+      return; // handled seperately
     } else if (curr->is<Switch>()) {
       auto* sw = curr->cast<Switch>();
       for (auto target : sw->targets) {
@@ -219,22 +219,23 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     self->sinkables.clear();
   }
 
-  static void doNoteIfElseCondition(SimplifyLocals* self, Expression** currp) {
-    // we processed the condition of this if-else, and now control flow branches
-    // into either the true or the false sides
-    assert((*currp)->cast<If>()->ifFalse);
+  static void doNoteIfCondition(SimplifyLocals* self, Expression** currp) {
+    // we processed the condition of this if, and now control flow branches
     self->sinkables.clear();
   }
 
-  static void doNoteIfElseTrue(SimplifyLocals* self, Expression** currp) {
-    // we processed the ifTrue side of this if-else, save it on the stack
-    assert((*currp)->cast<If>()->ifFalse);
-    self->ifStack.push_back(std::move(self->sinkables));
+  static void doNoteIfTrue(SimplifyLocals* self, Expression** currp) {
+    if ((*currp)->cast<If>()->ifFalse) {
+      // save the ifTrue data on the stack for ifElseFalse
+      self->ifStack.push_back(std::move(self->sinkables));
+    } else {
+      self->sinkables.clear();
+    }
   }
 
-  static void doNoteIfElseFalse(SimplifyLocals* self, Expression** currp) {
+  static void doNoteIfFalse(SimplifyLocals* self, Expression** currp) {
     // we processed the ifFalse side of this if-else, we can now try to
-    // mere with the ifTrue side and optimize a return value, if possible
+    // merge with the ifTrue side and optimize a return value, if possible
     auto* iff = (*currp)->cast<If>();
     assert(iff->ifFalse);
     self->optimizeIfReturn(iff, currp, self->ifStack.back());
@@ -449,13 +450,15 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
 
     auto* curr = *currp;
 
-    if (curr->is<If>() && curr->cast<If>()->ifFalse) {
-      // handle if-elses in a special manner, using the ifStack
-      self->pushTask(SimplifyLocals::doNoteIfElseFalse, currp);
-      self->pushTask(SimplifyLocals::scan, &curr->cast<If>()->ifFalse);
-      self->pushTask(SimplifyLocals::doNoteIfElseTrue, currp);
+    if (curr->is<If>()) {
+      // handle ifs in a special manner, using the ifStack
+      if (curr->cast<If>()->ifFalse) {
+        self->pushTask(SimplifyLocals::doNoteIfFalse, currp);
+        self->pushTask(SimplifyLocals::scan, &curr->cast<If>()->ifFalse);
+      }
+      self->pushTask(SimplifyLocals::doNoteIfTrue, currp);
       self->pushTask(SimplifyLocals::scan, &curr->cast<If>()->ifTrue);
-      self->pushTask(SimplifyLocals::doNoteIfElseCondition, currp);
+      self->pushTask(SimplifyLocals::doNoteIfCondition, currp);
       self->pushTask(SimplifyLocals::scan, &curr->cast<If>()->condition);
     } else {
       WalkerPass<LinearExecutionWalker<SimplifyLocals, Visitor<SimplifyLocals>>>::scan(self, currp);
