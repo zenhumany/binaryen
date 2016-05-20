@@ -25,8 +25,40 @@
 // a specific local, we can use a block return value for it, in effect
 // removing multiple set_locals and replacing them with one that the
 // block returns to. Further optimization rounds then have the opportunity
-// to remove that set_local as well. TODO: support partial traces; right
-// now, whenever control flow splits, we invalidate everything.
+// to remove that set_local as well.
+//
+// The simplest case is where we sink into the same basic block. A more
+// complex case is where control flow splits, for example, we might sink
+// over an if (if nothing inside it invalidates us), or we might sink into
+// one side of an if-else (if the value is only used there and never
+// elsewhere).
+//  * To handle splits and merges, we keep track of "fragments" of sinkable
+//    locals, one fragment going into each split. When we merge, we note
+//    whether we gathered together all the fragments; if we did, then this
+//    is no longer a fragment and we continue to seek a sinking opportunity
+//    normally.
+//  * "Lost" control flow - going into an unreachable, return, or function
+//    end - can be ignored for purposes of combining fragments into
+//    a whole; the whole is just what is not lost.
+//  * If we see a sinking opportunity on a fragment, we can only take it if
+//      1. The set cannot be sunk anywhere else, this is the sole use, and
+//      2. The value of the set has no side effects, since we are moving
+//         code into one of several control flow paths, e.g. in
+//           (set x (set y VALUE))
+//           (if ..
+//             (get x)
+//           )
+//           (get y)
+//         we cannot sink the set x, since it would take the set y with in,
+//         making it possibly not execute. The same is relevant for other
+//         side effects like calls, etc.
+//      TODO: do this. For simplicity, perhaps only do it if this
+//            local has one total assign (good enough for SSA)?
+//  * Control flow going into a loop invalidates us; a local that flows
+//    backwards (in any of its fragments) can never be sunk. Note that
+//    code physically inside a loop but branching out - i.e., code, that
+//    the compiler could have emitted outside - is fine, and can still
+//    be sunk normally.
 //
 // After this pass, some locals may be completely unused. reorder-locals
 // can get rid of those (the operation is trivial there after it sorts by use
@@ -60,6 +92,35 @@ struct SetLocalRemover : public WalkerPass<PostWalker<SetLocalRemover, Visitor<S
   }
 };
 
+struct Fragment {
+  Index top, bottom; // represents a rational number in [0, 1] equal to  top / bottom
+
+  Fragment() : top(1), bottom(1) {}
+  Fragment(Index top, Index bottom) : top(top), bottom(bottom) {}
+
+  void add(Fragment& other) {
+    if (bottom == other.bottom) {
+      top += other.top;
+    } else {
+      assert(bottom < std::numeric_limits<Index>::max() / other.bottom);
+      top = top * other.bottom + other.top * bottom;
+      bottom = bottom * other.bottom;
+    }
+    // normalize in the common case of merging to one. TODO: more normalization?
+    if (top == bottom) {
+      top = bottom = 1;
+    }
+  }
+
+  Fragment split(Index factor) {
+    return Fragment(top, bottom * factor);
+  }
+
+  bool one() {
+    return top == bottom;
+  }
+};
+
 // Main class
 
 struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, Visitor<SimplifyLocals>>> {
@@ -69,14 +130,41 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
   struct SinkableInfo {
     Expression** item;
     EffectAnalyzer effects;
+    Fragment frag;
 
     SinkableInfo(Expression** item) : item(item) {
       effects.walk(*item);
     }
+
   };
 
   // a list of sinkables in a linear execution trace
-  typedef std::map<Index, SinkableInfo> Sinkables;
+  class Sinkables : public std::map<Index, SinkableInfo> {
+  public:
+    void split(Index factor) {
+      for (auto& pair : *this) {
+        pair.second.frag.split(factor);
+      }
+    }
+
+    void merge(Sinkables& other) {
+      for (auto& pair : *this) {
+        auto iter = other.find(pair.first);
+        if (iter == other.end()) {
+          // nothing to do, leave it here
+        } else {
+          pair.second.frag.add(iter->second.frag);
+        }
+      }
+      for (auto& pair : other) {
+        auto iter = find(pair.first);
+        if (iter == other.end()) {
+          iter->second.frag.add(pair.second.frag);
+        }
+        // otherwise, already added
+      }
+    }
+  };
 
   // locals in current linear execution trace, which we try to sink
   Sinkables sinkables;
