@@ -104,10 +104,15 @@ struct Fragment {
   void add(Fragment& other) {
     if (bottom == other.bottom) {
       top += other.top;
+    } else if (bottom < other.bottom && other.bottom % bottom == 0) {
+      auto factor = other.bottom / bottom;
+      top = top * factor + other.top;
+      bottom = other.bottom;
+    } else if (bottom > other.bottom && bottom % other.bottom == 0) {
+      auto factor = bottom / other.bottom;
+      top = top + factor * other.top;
     } else {
-      assert(bottom < std::numeric_limits<Index>::max() / other.bottom);
-      top = top * other.bottom + other.top * bottom;
-      bottom = bottom * other.bottom;
+      Fatal() << "adding weird fragments " << top << "/" << bottom << " , " << other.top << "/" << other.bottom << "\n";
     }
     // normalize in the common case of merging to one. TODO: more normalization?
     if (top == bottom) {
