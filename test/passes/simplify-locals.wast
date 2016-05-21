@@ -523,6 +523,13 @@
       (i32.const 0)
     )
     (get_local $w)
+    ;; if-else, sink this
+    (set_local $z (i32.const 11))
+    (if (i32.const -11)
+      (i32.const 0)
+      (i32.const 0)
+    )
+    (get_local $z)
   )
 )
 

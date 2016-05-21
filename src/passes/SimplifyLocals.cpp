@@ -258,8 +258,8 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     auto* iff = (*currp)->cast<If>();
     assert(iff->ifFalse);
     self->optimizeIfReturn(iff, currp, self->ifStack.back());
+    self->sinkables.merge(self->ifStack.back());
     self->ifStack.pop_back();
-    self->sinkables.clear(); // TODO: merge here
   }
 
   void visitBlock(Block* curr) {

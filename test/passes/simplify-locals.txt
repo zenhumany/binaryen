@@ -273,9 +273,7 @@
         (i32.const 16)
       )
     )
-    (set_local $$rem
-      (get_local $__stackBase__)
-    )
+    (nop)
     (nop)
     (nop)
     (nop)
@@ -399,7 +397,9 @@
       (i32.load
         (i32.const 168)
       )
-      (get_local $$rem)
+      (set_local $$rem
+        (get_local $__stackBase__)
+      )
     )
     (set_local $$10$0
       (call_import $_i64Subtract
@@ -457,17 +457,15 @@
         )
         (get_local $x)
         (block $waka2
-          (set_local $x
-            (if
-              (i32.const 1)
-              (block
-                (nop)
-                (i32.const 13)
-              )
-              (block
-                (nop)
-                (i32.const 24)
-              )
+          (if
+            (i32.const 1)
+            (block
+              (nop)
+              (i32.const 13)
+            )
+            (block
+              (nop)
+              (i32.const 24)
             )
           )
           (nop)
@@ -619,5 +617,14 @@
       (i32.const 0)
     )
     (get_local $w)
+    (nop)
+    (if
+      (i32.const -11)
+      (i32.const 0)
+      (i32.const 0)
+    )
+    (set_local $z
+      (i32.const 11)
+    )
   )
 )
