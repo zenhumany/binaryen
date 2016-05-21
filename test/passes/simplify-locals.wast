@@ -692,5 +692,34 @@
       (get_local $w)
     )
   )
+  (func $through-loop
+    (local $x i32)
+    (local $y i32)
+    (local $z i32)
+    (local $w i32)
+    (set_local $x (i32.const 0)) ;; sink this
+    (loop)
+    (get_local $x)
+    (set_local $x (i32.const 1)) ;; sink this
+    (loop
+      (i32.const 0)
+    )
+    (get_local $x)
+    (set_local $x (i32.const 2)) ;; sink this
+    (loop $exit $continue
+      (br $exit)
+    )
+    (get_local $x)
+    (set_local $x (i32.const -3)) ;; do NOT sink this
+    (loop $exit $continue
+      (br $continue)
+    )
+    (get_local $x)
+    (set_local $x (i32.const -4)) ;; do NOT sink this
+    (loop $exit2 $continue2
+      (br $continue2)
+    )
+    (get_local $x)
+  )
 )
 

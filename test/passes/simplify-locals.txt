@@ -856,4 +856,38 @@
       )
     )
   )
+  (func $through-loop
+    (local $x i32)
+    (local $y i32)
+    (local $z i32)
+    (local $w i32)
+    (set_local $x
+      (i32.const 1)
+    )
+    (loop $loop-out0 $loop-in1
+      (i32.const 0)
+    )
+    (get_local $x)
+    (set_local $x
+      (i32.const 2)
+    )
+    (loop $exit $continue
+      (br $exit)
+    )
+    (get_local $x)
+    (set_local $x
+      (i32.const -3)
+    )
+    (loop $exit $continue
+      (br $continue)
+    )
+    (get_local $x)
+    (set_local $x
+      (i32.const -4)
+    )
+    (loop $exit2 $continue2
+      (br $continue2)
+    )
+    (get_local $x)
+  )
 )

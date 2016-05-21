@@ -233,6 +233,8 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
       return;
     } else if (curr->is<Block>()) {
       return; // handled in visitBlock
+    } else if (curr->is<Loop>()) {
+      return; // handled in visitLoop
     } else if (curr->is<If>()) {
       return; // handled seperately
     } else if (curr->is<Switch>()) {
@@ -289,45 +291,49 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     optimizeBlockReturn(curr);
 
     if (curr->name.is()) {
-      if (unoptimizableBlocks.count(curr->name) > 0) {
-        unoptimizableBlocks.erase(curr->name);
+      if (unoptimizableBlocks.count(curr->name) > 0) unoptimizableBlocks.erase(curr->name);
+      mergeExitingControlFlow(curr->name);
+    }
+  }
+
+  void mergeExitingControlFlow(Name name) {
+    if (breaks.count(name) > 0) {
+      auto& blockBreaks = breaks[name];
+      assert(blockBreaks.size() > 0);
+      bool first;
+      if (reachable) {
+        // something might be flowing out
+        first = false;
+      } else {
+        first = true;
+        sinkables.clear();
       }
-      if (breaks.count(curr->name) > 0) {
-        auto& blockBreaks = breaks[curr->name];
-        assert(blockBreaks.size() > 0);
-        bool first;
-        if (reachable) {
-          // something might be flowing out
+      for (auto& info : blockBreaks) {
+        if (first) {
+          sinkables = std::move(info.sinkables);
           first = false;
         } else {
-          first = true;
-          sinkables.clear();
+          sinkables.merge(info.sinkables);
         }
-        for (auto& info : blockBreaks) {
-          if (first) {
-            sinkables = std::move(info.sinkables);
-            first = false;
-          } else {
-            sinkables.merge(info.sinkables);
-          }
-        }
-        breaks.erase(curr->name);
-        // assume that if there was a branch here, then we are now reachable.
-        // if the branch was unreachable, that's too optimistic, but dce
-        // would remove such branches anyhow.
-        // otherwise, if we have no branches, leave reachable as is.
-        reachable = true;
       }
+      breaks.erase(name);
+      // assume that if there was a branch here, then we are now reachable.
+      // if the branch was unreachable, that's too optimistic, but dce
+      // would remove such branches anyhow.
+      // otherwise, if we have no branches, leave reachable as is.
+      reachable = true;
     }
   }
 
   void visitLoop(Loop* curr) {
-    if (curr->in.is()) breaks.erase(curr->in);
-    if (curr->out.is()) {
-      breaks.erase(curr->out);
-      reachable = true; // as in block
+    if (curr->in.is()) {
+      if (unoptimizableBlocks.count(curr->in) > 0) unoptimizableBlocks.erase(curr->in);
+      breaks.erase(curr->in);
     }
-    // TODO: merge control flow at exit
+    if (curr->out.is()) {
+      if (unoptimizableBlocks.count(curr->out) > 0) unoptimizableBlocks.erase(curr->out);
+      mergeExitingControlFlow(curr->out);
+    }
   }
 
   void visitGetLocal(GetLocal *curr) {
