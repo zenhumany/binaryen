@@ -112,8 +112,8 @@ struct Fragment {
     }
   }
 
-  Fragment split(Index factor) {
-    return Fragment(top, bottom * factor);
+  void split(Index factor) {
+    bottom *= factor;
   }
 
   bool one() {
@@ -148,20 +148,31 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     }
 
     void merge(Sinkables& other) {
-      for (auto& pair : *this) {
-        auto iter = other.find(pair.first);
-        if (iter == other.end()) {
-          // nothing to do, leave it here
-        } else {
-          pair.second.frag.add(iter->second.frag);
-        }
-      }
+      // anything not in both must be erased
       for (auto& pair : other) {
         auto iter = find(pair.first);
-        if (iter == other.end()) {
-          iter->second.frag.add(pair.second.frag);
+        if (iter == end()) {
+          // already not present in *this
+        } else if (iter->second.item != pair.second.item) {
+          erase(iter); // in both, but different instances of the same Index, also bad
         }
-        // otherwise, already added
+      }
+      for (auto i = begin(); i != end();) {
+        auto curr = i;
+        i++;
+        auto iter = other.find(curr->first);
+        if (iter != other.end()) {
+          curr->second.frag.add(iter->second.frag);
+        } else {
+          erase(curr);
+        }
+      }
+    }
+
+    void dump(std::string text = "sinkables") {
+      std::cout << text << ":\n";
+      for (auto& pair : *this) {
+        std::cout << "  " << pair.first << " : (" << pair.second.frag.top << " / " << pair.second.frag.bottom << ")\n";
       }
     }
   };
@@ -220,16 +231,24 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
   }
 
   static void doNoteIfCondition(SimplifyLocals* self, Expression** currp) {
-    // we processed the condition of this if, and now control flow branches
-    self->sinkables.clear();
+    // we processed the condition of this if, and now control flow branches into 2
+    // leave one split half for now, and put the other on the stack
+    self->sinkables.split(2);
+    self->ifStack.push_back(self->sinkables);
   }
 
   static void doNoteIfTrue(SimplifyLocals* self, Expression** currp) {
+    // the stack has the sinkable starting state for the ifFalse
+    Sinkables forIfFalse = std::move(self->ifStack.back());
+    self->ifStack.pop_back(); // ifStack is now back to before
     if ((*currp)->cast<If>()->ifFalse) {
-      // save the ifTrue data on the stack for ifElseFalse
+      // save the ifTrue data on the stack
       self->ifStack.push_back(std::move(self->sinkables));
+      // set the new sinkables in place for the ifFalse
+      self->sinkables = std::move(forIfFalse);
     } else {
-      self->sinkables.clear();
+      // no ifFalse, so as if it was empty and no changes to the sinkables there. merge.
+      self->sinkables.merge(forIfFalse);
     }
   }
 
@@ -240,7 +259,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     assert(iff->ifFalse);
     self->optimizeIfReturn(iff, currp, self->ifStack.back());
     self->ifStack.pop_back();
-    self->sinkables.clear();
+    self->sinkables.clear(); // TODO: merge here
   }
 
   void visitBlock(Block* curr) {
@@ -265,7 +284,8 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
 
   void visitGetLocal(GetLocal *curr) {
     auto found = sinkables.find(curr->index);
-    if (found != sinkables.end()) {
+    // if this is among the sinkables, and it not a fragment, sink it
+    if (found != sinkables.end() && found->second.frag.one()) {
       // sink it, and nop the origin
       replaceCurrent(*found->second.item);
       // reuse the getlocal that is dying
@@ -311,7 +331,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
       // if we see a set that was already potentially-sinkable, then the previous
       // store is dead, leave just the value
       auto found = self->sinkables.find(set->index);
-      if (found != self->sinkables.end()) {
+      if (found != self->sinkables.end() && found->second.frag.one()) {
         *found->second.item = (*found->second.item)->cast<SetLocal>()->value;
         self->sinkables.erase(found);
         self->anotherCycle = true;
@@ -352,10 +372,13 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     bool found = false;
     Index sharedIndex = -1;
     for (auto& sinkable : sinkables) {
+      if (!sinkable.second.frag.one()) continue;
       Index index = sinkable.first;
       bool inAll = true;
       for (size_t j = 0; j < breaks.size(); j++) {
-        if (breaks[j].sinkables.count(index) == 0) {
+        auto& breakSinkables = breaks[j].sinkables;
+        auto iter = breakSinkables.find(index);
+        if (iter == breakSinkables.end() || !iter->second.frag.one()) {
           inAll = false;
           break;
         }
@@ -407,8 +430,10 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     Index sharedIndex = -1;
     bool found = false;
     for (auto& sinkable : ifTrue) {
+      if (!sinkable.second.frag.one()) continue;
       Index index = sinkable.first;
-      if (ifFalse.count(index) > 0) {
+      auto iter = ifFalse.find(index);
+      if (iter != ifFalse.end() && iter->second.frag.one()) {
         sharedIndex = index;
         found = true;
         break;
