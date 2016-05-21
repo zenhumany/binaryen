@@ -54,6 +54,9 @@
 //         side effects like calls, etc.
 //      TODO: do this. For simplicity, perhaps only do it if this
 //            local has one total assign (good enough for SSA)?
+//            alternatively, if one pass sees 50% was lost control flow,
+//            then next round we can start that set at 2 instead of 1,
+//            so the fragment has enough to be invalidated.
 //  * Control flow going into a loop invalidates us; a local that flows
 //    backwards (in any of its fragments) can never be sunk. Note that
 //    code physically inside a loop but branching out - i.e., code, that
@@ -193,8 +196,8 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
   // block returns
   std::map<Name, std::vector<BlockBreak>> blockBreaks;
 
-  // blocks that are the targets of a switch; we need to know this
-  // since we can't produce a block return value for them.
+  // blocks that we can't optimize a return value for, either
+  // the targets of a switch, or they already have a value
   std::set<Name> unoptimizableBlocks;
 
   // A stack of sinkables from the current traversal state. When
