@@ -180,7 +180,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     void dump(std::string text = "sinkables") {
       std::cout << text << ":\n";
       for (auto& pair : *this) {
-        std::cout << "  " << pair.first << " : (" << pair.second.frag.top << " / " << pair.second.frag.bottom << ")\n";
+        std::cout << "  " << pair.first << " : " << int(pair.second.item) << " : (" << pair.second.frag.top << " / " << pair.second.frag.bottom << ")\n";
       }
     }
   };
@@ -191,24 +191,26 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
   // Information about an exit from a block: the break, and the
   // sinkables. For the final exit from a block (falling off)
   // exitter is null.
-  struct BlockBreak {
+  struct BreakInfo {
     Break* br;
     Sinkables sinkables;
   };
 
-  // a list of all sinkable traces that exit a block. the last
-  // is falling off the end, others are branches. this is used for
-  // block returns
-  std::map<Name, std::vector<BlockBreak>> blockBreaks;
+  // information flowing along breaks.
+  std::map<Name, std::vector<BreakInfo>> breaks;
 
   // blocks that we can't optimize a return value for, either
-  // the targets of a switch, or they already have a value
+  // the targets of a switch (so they can't have a value TODO: they can)
+  // or they already have a value
   std::set<Name> unoptimizableBlocks;
 
   // A stack of sinkables from the current traversal state. When
   // execution reaches an if-else, it splits, and can then
   // be merged on return.
   std::vector<Sinkables> ifStack;
+
+  // whether the current code is actually reachable
+  bool reachable;
 
   // whether we need to run an additional cycle
   bool anotherCycle;
@@ -220,20 +222,33 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
       if (br->value) {
         // value means the block already has a return value
         self->unoptimizableBlocks.insert(br->name);
-      } else {
-        self->blockBreaks[br->name].push_back({ br, std::move(self->sinkables) });
       }
+      if (br->condition) {
+        self->sinkables.split(2);
+        self->breaks[br->name].push_back({ br, self->sinkables });
+      } else {
+        self->breaks[br->name].push_back({ br, std::move(self->sinkables) });
+        self->reachable = false;
+      }
+      return;
     } else if (curr->is<Block>()) {
       return; // handled in visitBlock
     } else if (curr->is<If>()) {
       return; // handled seperately
     } else if (curr->is<Switch>()) {
       auto* sw = curr->cast<Switch>();
+      // targets may appear more than once, gather them
+      std::set<Name> targets;
       for (auto target : sw->targets) {
+        targets.insert(target);
+      }
+      targets.insert(sw->default_);
+      self->sinkables.split(targets.size());
+      for (auto target : targets) {
+        self->breaks[target].push_back({ nullptr, self->sinkables });
         self->unoptimizableBlocks.insert(target);
       }
-      self->unoptimizableBlocks.insert(sw->default_);
-      // TODO: we could use this info to stop gathering data on these blocks
+      self->reachable = false;
     }
     self->sinkables.clear();
   }
@@ -271,23 +286,48 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
   }
 
   void visitBlock(Block* curr) {
-    bool hasBreaks = curr->name.is() && blockBreaks[curr->name].size() > 0;
+    optimizeBlockReturn(curr);
 
-    optimizeBlockReturn(curr); // can modify blockBreaks
-
-    // post-block cleanups
     if (curr->name.is()) {
-      if (unoptimizableBlocks.count(curr->name)) {
-        sinkables.clear();
+      if (unoptimizableBlocks.count(curr->name) > 0) {
         unoptimizableBlocks.erase(curr->name);
       }
-
-      if (hasBreaks) {
-        // more than one path to here, so nonlinear
-        sinkables.clear();
-        blockBreaks.erase(curr->name);
+      if (breaks.count(curr->name) > 0) {
+        auto& blockBreaks = breaks[curr->name];
+        assert(blockBreaks.size() > 0);
+        bool first;
+        if (reachable) {
+          // something might be flowing out
+          first = false;
+        } else {
+          first = true;
+          sinkables.clear();
+        }
+        for (auto& info : blockBreaks) {
+          if (first) {
+            sinkables = std::move(info.sinkables);
+            first = false;
+          } else {
+            sinkables.merge(info.sinkables);
+          }
+        }
+        breaks.erase(curr->name);
+        // assume that if there was a branch here, then we are now reachable.
+        // if the branch was unreachable, that's too optimistic, but dce
+        // would remove such branches anyhow.
+        // otherwise, if we have no branches, leave reachable as is.
+        reachable = true;
       }
     }
+  }
+
+  void visitLoop(Loop* curr) {
+    if (curr->in.is()) breaks.erase(curr->in);
+    if (curr->out.is()) {
+      breaks.erase(curr->out);
+      reachable = true; // as in block
+    }
+    // TODO: merge control flow at exit
   }
 
   void visitGetLocal(GetLocal *curr) {
@@ -302,6 +342,14 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
       sinkables.erase(found);
       anotherCycle = true;
     }
+  }
+
+  void visitReturn(Return* curr) {
+    reachable = false;
+  }
+
+  void visitUnreachable(Unreachable* curr) {
+    reachable = false;
   }
 
   void checkInvalidations(EffectAnalyzer& effects) {
@@ -372,10 +420,12 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     if (!block->name.is() || unoptimizableBlocks.count(block->name) > 0) {
       return;
     }
-    auto breaks = std::move(blockBreaks[block->name]);
-    blockBreaks.erase(block->name);
-    if (breaks.size() == 0) return; // block has no branches TODO we might optimize trivial stuff here too
-    assert(!breaks[0].br->value); // block does not already have a return value (if one break has one, they all do)
+    auto iter = breaks.find(block->name);
+    if (iter == breaks.end()) return; // block has no branches TODO we might optimize trivial stuff here too
+    auto& blockBreaks = iter->second;
+    assert(blockBreaks.size() > 0);
+    assert(blockBreaks[0].br);
+    assert(!blockBreaks[0].br->value); // block does not already have a return value (if one break has one, they all do)
     // look for a set_local that is present in them all
     bool found = false;
     Index sharedIndex = -1;
@@ -383,8 +433,8 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
       if (!sinkable.second.frag.one()) continue;
       Index index = sinkable.first;
       bool inAll = true;
-      for (size_t j = 0; j < breaks.size(); j++) {
-        auto& breakSinkables = breaks[j].sinkables;
+      for (size_t j = 0; j < blockBreaks.size(); j++) {
+        auto& breakSinkables = blockBreaks[j].sinkables;
         auto iter = breakSinkables.find(index);
         if (iter == breakSinkables.end() || !iter->second.frag.one()) {
           inAll = false;
@@ -413,17 +463,18 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     block->list[block->list.size() - 1] = value;
     block->type = value->type;
     ExpressionManipulator::nop(*blockSetLocalPointer);
-    for (size_t j = 0; j < breaks.size(); j++) {
+    sinkables.erase(sharedIndex);
+    for (size_t j = 0; j < blockBreaks.size(); j++) {
       // move break set_local's value to the break
-      auto* breakSetLocalPointer = breaks[j].sinkables.at(sharedIndex).item;
-      assert(!breaks[j].br->value);
-      breaks[j].br->value = (*breakSetLocalPointer)->cast<SetLocal>()->value;
+      auto* breakSetLocalPointer = blockBreaks[j].sinkables.at(sharedIndex).item;
+      assert(!blockBreaks[j].br->value);
+      blockBreaks[j].br->value = (*breakSetLocalPointer)->cast<SetLocal>()->value;
       ExpressionManipulator::nop(*breakSetLocalPointer);
+      blockBreaks[j].sinkables.erase(sharedIndex);
     }
     // finally, create a set_local on the block itself
     auto* newSetLocal = Builder(*getModule()).makeSetLocal(sharedIndex, block);
     replaceCurrent(newSetLocal);
-    sinkables.clear();
     anotherCycle = true;
   }
 
@@ -463,11 +514,13 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     ifTrueBlock->list[ifTrueBlock->list.size() - 1] = (*ifTrueItem)->cast<SetLocal>()->value;
     ExpressionManipulator::nop(*ifTrueItem);
     ifTrueBlock->finalize();
+    ifTrue.erase(sharedIndex);
     assert(ifTrueBlock->type != none);
     auto *ifFalseItem = ifFalse.at(sharedIndex).item;
     ifFalseBlock->list[ifFalseBlock->list.size() - 1] = (*ifFalseItem)->cast<SetLocal>()->value;
     ExpressionManipulator::nop(*ifFalseItem);
     ifFalseBlock->finalize();
+    ifFalse.erase(sharedIndex);
     assert(ifTrueBlock->type != none);
     iff->finalize(); // update type
     assert(iff->type != none);
@@ -508,6 +561,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     // the load cannot cross the store, but y can be sunk, after which so can x
     do {
       anotherCycle = false;
+      reachable = true;
       // main operation
       WalkerPass<LinearExecutionWalker<SimplifyLocals, Visitor<SimplifyLocals>>>::walk(root);
       // enlarge blocks that were marked, for the next round
@@ -537,7 +591,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
       }
       // clean up
       sinkables.clear();
-      blockBreaks.clear();
+      breaks.clear();
       unoptimizableBlocks.clear();
     } while (anotherCycle);
     // Finally, after optimizing a function, we can see if we have set_locals

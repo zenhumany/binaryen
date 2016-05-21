@@ -390,10 +390,12 @@
   (func $block-returns
     (local $x i32)
     (block $out
-      (block $waka
-        (set_local $x (i32.const 12))
-        (br_if $waka
-          (i32.const 1)
+      (block $waka ;; block can have a return value optimized in
+        (if (i32.const 0)
+          (block
+            (set_local $x (i32.const 12))
+            (br $waka)
+          )
         )
         (set_local $x (i32.const 34))
       )
@@ -530,6 +532,165 @@
       (i32.const 0)
     )
     (get_local $z)
+  )
+  (func $through-br
+    (local $x i32)
+    (local $y i32)
+    (local $z i32)
+    (local $w i32)
+    (set_local $x (i32.const 1)) ;; sink this
+    (block
+      (i32.const 0)
+    )
+    (get_local $x)
+    (set_local $x (i32.const 2)) ;; sink this
+    (block $ignore
+      (br $ignore)
+    )
+    (get_local $x)
+    (set_local $x (i32.const 3)) ;; sink this
+    (block $no-ignore
+      (br $no-ignore)
+      (i32.const 0)
+    )
+    (get_local $x)
+    (set_local $x (i32.const 33)) ;; sink this
+    (block $no-ignore2
+      (br_if $no-ignore2 (i32.const 0))
+      (i32.const 0)
+    )
+    (get_local $x)
+    (set_local $x (i32.const 4)) ;; sink this
+    (block $ignore2
+      (block $ignore3
+        (br $ignore2)
+      )
+    )
+    (get_local $x)
+    (set_local $x (i32.const 5)) ;; sink this
+    (block $ignore4
+      (block $ignore5
+        (br $ignore5)
+      )
+    )
+    (get_local $x)
+    (set_local $x (i32.const 6)) ;; sink this
+    (block $ignore6
+      (block $ignore7
+        (br_table $ignore6 $ignore7
+          (i32.const 0)
+        )
+      )
+    )
+    (get_local $x)
+    (set_local $y (i32.const 7)) ;; sink this
+    (block $ignore
+      (br $ignore (i32.const 0))
+    )
+    (get_local $y)
+    (set_local $y (i32.const 7)) ;; sink this
+    (block $ignore8
+      (block $ignore9
+        (br $ignore8 (i32.const 0))
+      )
+    )
+    (get_local $y)
+    (set_local $y (i32.const 9)) ;; sink this
+    (block $ignore10
+      (block $ignore11
+        (br $ignore11 (i32.const 0))
+      )
+    )
+    (get_local $y)
+    (set_local $y (i32.const 10)) ;; sink this
+    (block $ignore12
+      (block $ignore13
+        (br_table $ignore12 $ignore13
+          (i32.const 0)
+          (i32.const 0)
+        )
+      )
+    )
+    (get_local $y)
+    (set_local $z (i32.const 11)) ;; sink this
+    (block $ignore14
+      (br_if $ignore14 (i32.const 0))
+    )
+    (get_local $z)
+    (set_local $z (i32.const 12)) ;; sink this
+    (block $ignore15
+      (block $ignore16
+        (br_if $ignore15 (i32.const 0)
+          (i32.const 0)
+        )
+      )
+    )
+    (get_local $z)
+    (set_local $z (i32.const 13)) ;; sink this
+    (block $ignore17
+      (block $ignore18
+        (br_if $ignore18 (i32.const 0))
+      )
+    )
+    (get_local $z)
+    (set_local $w (i32.const -14)) ;; sink this eventually, an ignore lost control flow
+    (block $ignore19
+      (br_if $ignore19 (i32.const 0))
+      (br_if $ignore19 (i32.const 0))
+      (br_if $ignore19 (i32.const 0))
+      (br_if $ignore19 (i32.const 0))
+      (br_if $ignore19 (i32.const 0))
+      (unreachable)
+    )
+    (get_local $w)
+    (set_local $w (i32.const 15)) ;; sink this
+    (block $ignore20
+      (br_if $ignore20 (i32.const 0))
+      (br_if $ignore20 (i32.const 0))
+      (br_if $ignore20 (i32.const 0))
+      (br_if $ignore20 (i32.const 0))
+      (br_if $ignore20 (i32.const 0))
+      (i32.const 0)
+    )
+    (get_local $w)
+    (set_local $w (i32.const 16)) ;; sink this
+    (block $ignore21
+      (br_if $ignore21 (i32.const 0))
+      (br_if $ignore21 (i32.const 0))
+      (br_if $ignore21 (i32.const 0))
+      (br_if $ignore21 (i32.const 0))
+      (br $ignore21)
+    )
+    (get_local $w)
+    (set_local $w (i32.const -17)) ;; sink this eventually
+    (block $ignore22
+      (br_if $ignore22 (i32.const 0))
+      (br_if $ignore22 (i32.const 0))
+      (br_if $ignore22 (i32.const 0))
+      (br_if $ignore22 (i32.const 0))
+      (return)
+    )
+    (get_local $w)
+    (set_local $w (i32.const -18)) ;; finally, do NOT sink this
+    (block $ignore23
+      (br_if $ignore23 (i32.const 0))
+      (get_local $w)
+    )
+    (get_local $w)
+    (block $b1
+      (set_local $w (i32.const -19)) ;; and also not this
+      (block $b2
+        (br_if $b1 (i32.const 0))
+      )
+      (get_local $w)
+    )
+    (block $b1b
+      (set_local $w (i32.const 20)) ;; but yes this
+      (block $b2b
+        (br_if $b2b (i32.const 0))
+      )
+      (get_local $w)
+    )
   )
 )
 
