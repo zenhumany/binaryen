@@ -57,11 +57,12 @@
 //            alternatively, if one pass sees 50% was lost control flow,
 //            then next round we can start that set at 2 instead of 1,
 //            so the fragment has enough to be invalidated.
-//  * Control flow going into a loop invalidates us; a local that flows
-//    backwards (in any of its fragments) can never be sunk. Note that
-//    code physically inside a loop but branching out - i.e., code, that
-//    the compiler could have emitted outside - is fine, and can still
-//    be sunk normally.
+//  * Control flow going into a loop cannot be used to sink until we exit
+//    it, due to the loop backedge.
+//  * Note that fragment analysis is costly (15% extra time in this pass),
+//    and the vast majority of sinking opportunities have already been
+//    handled, so it might not be worth it. Consider an option to disable,
+//    after more perf tuning here TODO
 //
 // After this pass, some locals may be completely unused. reorder-locals
 // can get rid of those (the operation is trivial there after it sorts by use
