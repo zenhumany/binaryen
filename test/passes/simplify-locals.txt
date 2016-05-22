@@ -861,20 +861,21 @@
     (local $y i32)
     (local $z i32)
     (local $w i32)
-    (set_local $x
-      (i32.const 1)
-    )
+    (nop)
     (loop $loop-out0 $loop-in1
+      (nop)
+    )
+    (i32.const 0)
+    (nop)
+    (loop $loop-out2 $loop-in3
       (i32.const 0)
     )
-    (get_local $x)
-    (set_local $x
-      (i32.const 2)
-    )
+    (i32.const 1)
+    (nop)
     (loop $exit $continue
       (br $exit)
     )
-    (get_local $x)
+    (i32.const 2)
     (set_local $x
       (i32.const -3)
     )

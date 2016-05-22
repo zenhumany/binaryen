@@ -231,12 +231,8 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
         self->reachable = false;
       }
       return;
-    } else if (curr->is<Block>()) {
-      return; // handled in visitBlock
-    } else if (curr->is<Loop>()) {
-      return; // handled in visitLoop
-    } else if (curr->is<If>()) {
-      return; // handled seperately
+    } else if (curr->is<Block>() || curr->is<Loop>() || curr->is<If>()) {
+      return; // these are handled in their visitors
     } else if (curr->is<Switch>()) {
       auto* sw = curr->cast<Switch>();
       // targets may appear more than once, gather them
@@ -325,6 +321,16 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     }
   }
 
+  static void doNoteBeforeLoop(SimplifyLocals* self, Expression** currp) {
+    // we cannot sink into a loop from outside, since the loop has another entry.
+    // however, we can sink across it, if it does not invalidate us. to allow that,
+    // we consider a loop like an if-else, where one branch is empty, and the other
+    // has the loop. this means that the sinkables flowing into the loop are just
+    // fragments, so they cannot be sunk, but after rejoining, they might.
+    self->sinkables.split(2);
+    self->ifStack.push_back(self->sinkables);
+  }
+
   void visitLoop(Loop* curr) {
     if (curr->in.is()) {
       if (unoptimizableBlocks.count(curr->in) > 0) unoptimizableBlocks.erase(curr->in);
@@ -334,6 +340,9 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
       if (unoptimizableBlocks.count(curr->out) > 0) unoptimizableBlocks.erase(curr->out);
       mergeExitingControlFlow(curr->out);
     }
+    // we also merge with the ifStack top, as we split ourselves and can now join
+    sinkables.merge(ifStack.back());
+    ifStack.pop_back();
   }
 
   void visitGetLocal(GetLocal *curr) {
@@ -376,11 +385,6 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
   static void visitPre(SimplifyLocals* self, Expression** currp) {
     Expression* curr = *currp;
 
-    EffectAnalyzer effects;
-    if (effects.checkPre(curr)) {
-      self->checkInvalidations(effects);
-    }
-
     self->expressionStack.push_back(curr);
   }
 
@@ -401,7 +405,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     }
 
     EffectAnalyzer effects;
-    if (effects.checkPost(*currp)) {
+    if (effects.check(*currp)) {
       self->checkInvalidations(effects);
     }
 
@@ -552,6 +556,10 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
       self->pushTask(SimplifyLocals::scan, &curr->cast<If>()->ifTrue);
       self->pushTask(SimplifyLocals::doNoteIfCondition, currp);
       self->pushTask(SimplifyLocals::scan, &curr->cast<If>()->condition);
+    } else if (curr->is<Loop>()) {
+      self->pushTask(SimplifyLocals::doVisitLoop, currp);
+      self->pushTask(SimplifyLocals::scan, &curr->cast<Loop>()->body);
+      self->pushTask(SimplifyLocals::doNoteBeforeLoop, currp);
     } else {
       WalkerPass<LinearExecutionWalker<SimplifyLocals, Visitor<SimplifyLocals>>>::scan(self, currp);
     }

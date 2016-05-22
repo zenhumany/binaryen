@@ -88,17 +88,7 @@ struct EffectAnalyzer : public PostWalker<EffectAnalyzer, Visitor<EffectAnalyzer
     return false;
   }
 
-  // the checks above happen after the node's children were processed, in the order of execution
-  // we must also check for control flow that happens before the children, i.e., loops
-  bool checkPre(Expression* curr) {
-    if (curr->is<Loop>()) {
-      branches = true;
-      return true;
-    }
-    return false;
-  }
-
-  bool checkPost(Expression* curr) {
+  bool check(Expression* curr) {
     visit(curr);
     return hasAnything();
   }
