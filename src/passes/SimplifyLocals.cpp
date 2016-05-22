@@ -67,6 +67,10 @@
 // After this pass, some locals may be completely unused. reorder-locals
 // can get rid of those (the operation is trivial there after it sorts by use
 // frequency).
+//
+// TODO: sinking very heavily can make code very nested, which can hurt
+//       readability and might hit recursion limits. Perhaps make it an
+//       option to do just one pass and/or limit the recursion.
 
 #include <wasm.h>
 #include <wasm-builder.h>
