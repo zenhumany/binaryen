@@ -721,5 +721,38 @@
     )
     (get_local $x)
   )
+  (func $reachable-after-ifs
+    (local $6 i32)
+    (local $7 i32)
+    (block $do-once$12
+      (if
+        (i32.eqz
+          (i32.const 0)
+        )
+        (block $block43
+          (set_local $6
+            (i32.const -1) ;; waka waka this is it
+          )
+          (br $do-once$12)
+        )
+      )
+    )
+    (get_local $6)
+    (block $do-once$12
+      (if
+        (i32.eqz
+          (i32.const 0)
+        )
+        (block $block43
+          (set_local $7
+            (i32.const -1) ;; waka waka this is it
+          )
+          (br $do-once$12)
+        )
+        (nop)
+      )
+    )
+    (get_local $7)
+  )
 )
 

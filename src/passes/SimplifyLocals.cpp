@@ -253,6 +253,8 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     } else {
       // no ifFalse, so as if it was empty and no changes to the sinkables there. merge.
       self->sinkables.merge(forIfFalse, self->totalFragments);
+      // we can reach after the if (unless the if itself was not reachable, but dce should fix that)
+      self->reachable = true;
     }
   }
 
@@ -264,6 +266,8 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
     self->optimizeIfReturn(iff, currp, self->ifStack.back());
     self->sinkables.merge(self->ifStack.back(), self->totalFragments);
     self->ifStack.pop_back();
+    // we can reach after the if (unless the if itself was not reachable, but dce should fix that)
+    self->reachable = true;
   }
 
   void visitBlock(Block* curr) {
