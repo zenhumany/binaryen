@@ -34,6 +34,7 @@
 #include "ast_utils.h"
 #include "parsing.h"
 #include "wasm-validator.h"
+#include "wasm-printing.h"
 
 namespace wasm {
 
@@ -418,6 +419,7 @@ enum ASTNodes {
   CallFunction = 0x16,
   CallIndirect = 0x17,
   CallImport = 0x18,
+  SetLocalDrop = 0x19,
 
   Nop = 0x00,
   Block = 0x01,
@@ -631,6 +633,8 @@ public:
     finishSection(start);
   }
 
+  Function* currFunction = nullptr;
+
   void writeFunctions() {
     if (wasm->functions.size() == 0) return;
     if (debug) std::cerr << "== writeFunctions" << std::endl;
@@ -641,7 +645,7 @@ public:
       if (debug) std::cerr << "write one at" << o.size() << std::endl;
       size_t sizePos = writeU32LEBPlaceholder();
       size_t start = o.size();
-      Function* function = wasm->getFunction(i);
+      Function* function = currFunction = wasm->getFunction(i);
       mappedLocals.clear();
       numLocalsByType.clear();
       if (debug) std::cerr << "writing" << function->name << std::endl;
@@ -657,12 +661,15 @@ public:
       if (numLocalsByType[f32]) o << U32LEB(numLocalsByType[f32]) << binaryWasmType(f32);
       if (numLocalsByType[f64]) o << U32LEB(numLocalsByType[f64]) << binaryWasmType(f64);
       depth = 0;
+      assert(expressionStack.size() == 0);
       recurse(function->body);
       assert(depth == 0);
+      assert(expressionStack.size() == 0);
       size_t size = o.size() - start;
       assert(size <= std::numeric_limits<uint32_t>::max());
       if (debug) std::cerr << "body size: " << size << ", writing at " << sizePos << ", next starts at " << o.size() << std::endl;
       o.writeAt(sizePos, U32LEB(size));
+      currFunction = nullptr;
     }
     finishSection(start);
   }
@@ -798,9 +805,14 @@ public:
 
   int depth; // only for debugging
 
+  std::vector<Expression*> expressionStack;
+
   void recurse(Expression*& curr) {
     if (debug) std::cerr << "zz recurse into " << ++depth << " at " << o.size() << std::endl;
+    expressionStack.push_back(curr);
     visit(curr);
+    assert(expressionStack.back() == curr);
+    expressionStack.pop_back();
     if (debug) std::cerr << "zz recurse from " << depth-- << " at " << o.size() << std::endl;
   }
 
@@ -826,9 +838,11 @@ public:
       recurse(curr);
       return;
     }
+    expressionStack.push_back(block);
     for (auto* child : block->list) {
       recurse(child);
     }
+    expressionStack.pop_back();
   }
 
   void visitIf(If *curr) {
@@ -917,7 +931,12 @@ public:
   void visitSetLocal(SetLocal *curr) {
     if (debug) std::cerr << "zz node: SetLocal" << std::endl;
     recurse(curr->value);
-    o << int8_t(BinaryConsts::SetLocal) << U32LEB(mappedLocals[curr->index]);
+    if (ExpressionAnalyzer::isResultUsed(expressionStack, currFunction)) {
+      o << int8_t(BinaryConsts::SetLocal);
+    } else {
+      o << int8_t(BinaryConsts::SetLocalDrop);
+    }
+    o << U32LEB(mappedLocals[curr->index]);
   }
 
   void emitMemoryAccess(size_t alignment, size_t bytes, uint32_t offset) {
