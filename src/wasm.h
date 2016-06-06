@@ -981,6 +981,8 @@ public:
         type = ifTrue->type;
       } else if (isConcreteWasmType(ifFalse->type) && ifTrue->type == unreachable) {
         type = ifFalse->type;
+      } else {
+        type = none;
       }
     }
   }

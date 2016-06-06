@@ -222,7 +222,7 @@ struct PrintSExpression : public Visitor<PrintSExpression> {
   }
   void visitSetLocal(SetLocal *curr) {
     if (curr->isTee()) {
-      printOpening(o, "set_local "); // TODO FIXME: switch to tee
+      printOpening(o, "tee_local "); // TODO FIXME: switch to tee
     } else {
       printOpening(o, "set_local ");
     }
@@ -337,10 +337,10 @@ struct PrintSExpression : public Visitor<PrintSExpression> {
       case DemoteFloat64:          o << "f32.demote/f64"; break;
       case ReinterpretInt32:       o << "f32.reinterpret/i32"; break;
       case ReinterpretInt64:       o << "f64.reinterpret/i64"; break;
-      case DropInt32:              o << "drop/i32"; break;
-      case DropInt64:              o << "drop/i64"; break;
-      case DropFloat32:            o << "drop/f32"; break;
-      case DropFloat64:            o << "drop/f64"; break;
+      case DropInt32:
+      case DropInt64:
+      case DropFloat32:
+      case DropFloat64:            o << "drop"; break;
       default: abort();
     }
     incIndent();
