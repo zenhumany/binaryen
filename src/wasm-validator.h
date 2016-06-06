@@ -204,6 +204,10 @@ public:
       case DemoteFloat64:          shouldBeEqual(curr->value->type, f64, curr, "demote type must be correct"); break;
       case ReinterpretInt32:       shouldBeEqual(curr->value->type, i32, curr, "reinterpret/i32 type must be correct"); break;
       case ReinterpretInt64:       shouldBeEqual(curr->value->type, i64, curr, "reinterpret/i64 type must be correct"); break;
+      case DropInt32:              shouldBeEqual(curr->value->type, i32, curr, "drop/i32 type must be correct"); break;
+      case DropInt64:              shouldBeEqual(curr->value->type, i64, curr, "drop/i64 type must be correct"); break;
+      case DropFloat32:            shouldBeEqual(curr->value->type, f32, curr, "drop/f32 type must be correct"); break;
+      case DropFloat64:            shouldBeEqual(curr->value->type, f64, curr, "drop/f64 type must be correct"); break;
       default: abort();
     }
   }

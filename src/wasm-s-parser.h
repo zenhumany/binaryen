@@ -570,7 +570,13 @@ public:
             if (op[3] == '_') return makeBinary(s, op[4] == 'u' ? BINARY_INT(DivU) : BINARY_INT(DivS), type);
             if (op[3] == 0) return makeBinary(s, BINARY_FLOAT(Div), type);
           }
-          if (op[1] == 'e') return makeUnary(s,  UnaryOp::DemoteFloat64, type);
+          if (op[1] == 'e') return makeUnary(s, UnaryOp::DemoteFloat64, type);
+          if (op[1] == 'r') {
+            if (strcmp(op, "drop/i32") == 0) return makeUnary(s, UnaryOp::DropInt32, none);
+            if (strcmp(op, "drop/i64") == 0) return makeUnary(s, UnaryOp::DropInt64, none);
+            if (strcmp(op, "drop/f32") == 0) return makeUnary(s, UnaryOp::DropFloat32, none);
+            if (strcmp(op, "drop/f64") == 0) return makeUnary(s, UnaryOp::DropFloat64, none);
+          }
           abort_on(op);
         }
         case 'e': {
@@ -728,6 +734,7 @@ public:
         }
         case 't': {
           if (str[1] == 'h') return makeThenOrElse(s);
+          if (str[1] == 'e' && str[2] == 'e') return makeTeeLocal(s);
           abort_on(str);
         }
         case 'u': {
@@ -852,11 +859,18 @@ private:
     return ret;
   }
 
+  Expression* makeTeeLocal(Element& s) {
+    auto ret = allocator.alloc<SetLocal>();
+    ret->index = getLocalIndex(*s[1]);
+    ret->value = parseExpression(s[2]);
+    ret->setTee(true);
+    return ret;
+  }
   Expression* makeSetLocal(Element& s) {
     auto ret = allocator.alloc<SetLocal>();
     ret->index = getLocalIndex(*s[1]);
     ret->value = parseExpression(s[2]);
-    ret->type = currFunction->getLocalType(ret->index);
+    ret->setTee(true); // FIXME TODO: false, when we switch to the new way
     return ret;
   }
 

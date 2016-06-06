@@ -15,7 +15,8 @@
  */
 
 //
-// Stops using return values from set_local and store nodes.
+// Stops using return values nodes that don't allow them. This converts
+// a module from before we had drop and tee into after.
 //
 
 #include <wasm.h>
@@ -32,17 +33,44 @@ struct DropReturnValues : public WalkerPass<PostWalker<DropReturnValues, Visitor
 
   std::vector<Expression*> expressionStack;
 
-  void visitSetLocal(SetLocal* curr) {
-    if (ExpressionAnalyzer::isResultUsed(expressionStack, getFunction())) {
-      Builder builder(*getModule());
-      replaceCurrent(builder.makeSequence(
-        curr,
-        builder.makeGetLocal(curr->index, curr->type)
-      ));
+  void maybeDrop(Expression* curr) {
+    if (isConcreteWasmType(curr->type) && !ExpressionAnalyzer::isResultUsed(expressionStack, getFunction())) {
+      replaceCurrent(Builder(*getModule()).makeDrop(curr));
     }
   }
 
+  void visitBlock(Block *curr) {
+    maybeDrop(curr);
+  }
+  void visitIf(If *curr) {
+    maybeDrop(curr);
+  }
+  void visitLoop(Loop *curr) {
+    maybeDrop(curr);
+  }
+  // TODO? void visitBreak(Break *curr) {}
+  void visitCall(Call *curr) {
+    maybeDrop(curr);
+  }
+  void visitCallImport(CallImport *curr) {
+    maybeDrop(curr);
+  }
+  void visitCallIndirect(CallIndirect *curr) {
+    maybeDrop(curr);
+  }
+  void visitGetLocal(GetLocal *curr) {
+    maybeDrop(curr);
+  }
+  void visitSetLocal(SetLocal* curr) {
+    if (curr->isTee() && !ExpressionAnalyzer::isResultUsed(expressionStack, getFunction())) {
+      curr->setTee(false); // this is not a tee
+    }
+  }
+  void visitLoad(Load *curr) {
+    maybeDrop(curr);
+  }
   void visitStore(Store* curr) {
+    // if a store returns a value, we need to copy it to a local
     if (ExpressionAnalyzer::isResultUsed(expressionStack, getFunction())) {
       Index index = getFunction()->getNumLocals();
       getFunction()->vars.emplace_back(curr->type);
@@ -56,6 +84,21 @@ struct DropReturnValues : public WalkerPass<PostWalker<DropReturnValues, Visitor
       ));
       curr->value = builder.makeGetLocal(index, curr->type);
     }
+  }
+  void visitConst(Const *curr) {
+    maybeDrop(curr);
+  }
+  void visitUnary(Unary *curr) {
+    maybeDrop(curr);
+  }
+  void visitBinary(Binary *curr) {
+    maybeDrop(curr);
+  }
+  void visitSelect(Select *curr) {
+    maybeDrop(curr);
+  }
+  void visitHost(Host *curr) {
+    maybeDrop(curr);
   }
 
   static void visitPre(DropReturnValues* self, Expression** currp) {
@@ -75,7 +118,7 @@ struct DropReturnValues : public WalkerPass<PostWalker<DropReturnValues, Visitor
   }
 };
 
-static RegisterPass<DropReturnValues> registerPass("drop-return-values", "stops relying on return values from set_local and store");
+static RegisterPass<DropReturnValues> registerPass("drop-return-values", "convert code to use drop and tee");
 
 } // namespace wasm
 

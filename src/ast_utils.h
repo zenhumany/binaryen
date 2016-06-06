@@ -221,7 +221,7 @@ struct ExpressionAnalyzer {
     for (int i = int(stack.size()) - 2; i >= 0; i--) {
       auto* curr = stack[i];
       auto* above = stack[i + 1];
-      // only if and block can drop values
+      // only if and block can drop values (pre-drop expression was added)
       if (curr->is<Block>()) {
         auto* block = curr->cast<Block>();
         for (size_t j = 0; j < block->list.size() - 1; j++) {
@@ -236,6 +236,7 @@ struct ExpressionAnalyzer {
         assert(above == iff->ifTrue || above == iff->ifFalse);
         // continue down
       } else {
+        if (curr->is<Unary>() && curr->cast<Unary>()->isDrop()) return false;
         return true; // all other node types use the result
       }
     }

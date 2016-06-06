@@ -799,7 +799,8 @@ enum UnaryOp {
   ConvertSInt32ToFloat32, ConvertSInt32ToFloat64, ConvertUInt32ToFloat32, ConvertUInt32ToFloat64, ConvertSInt64ToFloat32, ConvertSInt64ToFloat64, ConvertUInt64ToFloat32, ConvertUInt64ToFloat64, // int to float
   PromoteFloat32, // f32 to f64
   DemoteFloat64, // f64 to f32
-  ReinterpretInt32, ReinterpretInt64 // reinterpret bits to float
+  ReinterpretInt32, ReinterpretInt64, // reinterpret bits to float
+  DropInt32, DropInt64, DropFloat32, DropFloat64 // drop values
 };
 
 enum BinaryOp {
@@ -1090,7 +1091,16 @@ public:
   Expression *value;
 
   void finalize() {
-    type = value->type;
+    setTee(true); // default is tee
+  }
+
+  bool isTee() {
+    return type != none;
+  }
+
+  void setTee(bool is) {
+    if (is) type = value->type;
+    else type = none;
   }
 };
 
@@ -1147,6 +1157,8 @@ public:
 
   bool isRelational() { return op == EqZInt32 || op == EqZInt64; }
 
+  bool isDrop() { return op == DropInt32 || op == DropInt64 || op == DropFloat32 || op == DropFloat64; }
+
   void finalize() {
     switch (op) {
       case ClzInt32:
@@ -1195,6 +1207,10 @@ public:
       case ConvertUInt32ToFloat64:
       case ConvertSInt64ToFloat64:
       case ConvertUInt64ToFloat64: type = f64; break;
+      case DropInt32:
+      case DropInt64:
+      case DropFloat32:
+      case DropFloat64: type = none; break;
       default: std::cerr << "waka " << op << '\n'; WASM_UNREACHABLE();
     }
   }
