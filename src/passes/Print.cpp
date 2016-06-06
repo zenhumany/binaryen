@@ -222,7 +222,7 @@ struct PrintSExpression : public Visitor<PrintSExpression> {
   }
   void visitSetLocal(SetLocal *curr) {
     if (curr->isTee()) {
-      printOpening(o, "tee_local "); // TODO FIXME: switch to tee
+      printOpening(o, "set_local "); // TODO FIXME: switch to tee
     } else {
       printOpening(o, "set_local ");
     }

@@ -975,7 +975,13 @@ public:
   void finalize() {
     assert(ifTrue);
     if (ifFalse) {
-      type = getReachableWasmType(ifTrue->type, ifFalse->type);
+      if (ifTrue->type == ifFalse->type) {
+        type = ifTrue->type;
+      } else if (isConcreteWasmType(ifTrue->type) && ifFalse->type == unreachable) {
+        type = ifTrue->type;
+      } else if (isConcreteWasmType(ifFalse->type) && ifTrue->type == unreachable) {
+        type = ifFalse->type;
+      }
     }
   }
 };

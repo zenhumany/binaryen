@@ -40,10 +40,11 @@ struct DropReturnValues : public WalkerPass<PostWalker<DropReturnValues, Visitor
   }
 
   void visitBlock(Block *curr) {
-    curr->finalize();
+    curr->finalize(); // changes may have occured in our children
     maybeDrop(curr);
   }
   void visitIf(If *curr) {
+    curr->finalize();
     maybeDrop(curr);
   }
   void visitLoop(Loop *curr) {
