@@ -222,7 +222,7 @@ struct PrintSExpression : public Visitor<PrintSExpression> {
   }
   void visitSetLocal(SetLocal *curr) {
     if (curr->isTee()) {
-      printOpening(o, "set_local "); // TODO FIXME: switch to tee
+      printOpening(o, "tee_local "); // TODO FIXME: switch to tee
     } else {
       printOpening(o, "set_local ");
     }
@@ -259,7 +259,7 @@ struct PrintSExpression : public Visitor<PrintSExpression> {
   }
   void visitStore(Store *curr) {
     o << '(';
-    prepareColor(o) << printWasmType(curr->type) << ".store";
+    prepareColor(o) << printWasmType(curr->value->type) << ".store";
     if (curr->bytes < 4 || (curr->type == i64 && curr->bytes < 8)) {
       if (curr->bytes == 1) {
         o << '8';

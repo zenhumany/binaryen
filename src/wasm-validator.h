@@ -120,7 +120,9 @@ public:
   }
   void visitSetLocal(SetLocal *curr) {
     if (curr->value->type != unreachable) {
-      shouldBeEqualOrFirstIsUnreachable(curr->value->type, curr->type, curr, "set_local type must be correct");
+      if (curr->type != none) { // tee is ok anyhow
+        shouldBeEqualOrFirstIsUnreachable(curr->value->type, curr->type, curr, "set_local type must be correct");
+      }
     }
   }
   void visitLoad(Load *curr) {
@@ -130,7 +132,8 @@ public:
   void visitStore(Store *curr) {
     validateAlignment(curr->align);
     shouldBeEqualOrFirstIsUnreachable(curr->ptr->type, i32, curr, "store pointer type must be i32");
-    shouldBeEqualOrFirstIsUnreachable(curr->value->type, curr->type, curr, "store value type must match");
+    shouldBeUnequal(curr->value->type, none, curr, "store value type must not be none");
+    // TODO: enable a check that replaces this, for type being none shouldBeEqualOrFirstIsUnreachable(curr->value->type, curr->type, curr, "store value type must match");
   }
   void visitBinary(Binary *curr) {
     if (curr->left->type != unreachable && curr->right->type != unreachable) {

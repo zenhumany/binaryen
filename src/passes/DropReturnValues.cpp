@@ -40,12 +40,14 @@ struct DropReturnValues : public WalkerPass<PostWalker<DropReturnValues, Visitor
   }
 
   void visitBlock(Block *curr) {
+    curr->finalize();
     maybeDrop(curr);
   }
   void visitIf(If *curr) {
     maybeDrop(curr);
   }
   void visitLoop(Loop *curr) {
+    curr->finalize();
     maybeDrop(curr);
   }
   // TODO? void visitBreak(Break *curr) {}
@@ -70,19 +72,20 @@ struct DropReturnValues : public WalkerPass<PostWalker<DropReturnValues, Visitor
     maybeDrop(curr);
   }
   void visitStore(Store* curr) {
+    curr->type = none; // TODO: use in wasm.h
     // if a store returns a value, we need to copy it to a local
     if (ExpressionAnalyzer::isResultUsed(expressionStack, getFunction())) {
       Index index = getFunction()->getNumLocals();
-      getFunction()->vars.emplace_back(curr->type);
+      getFunction()->vars.emplace_back(curr->value->type);
       Builder builder(*getModule());
       replaceCurrent(builder.makeSequence(
         builder.makeSequence(
           builder.makeSetLocal(index, curr->value),
           curr
         ),
-        builder.makeGetLocal(index, curr->type)
+        builder.makeGetLocal(index, curr->value->type)
       ));
-      curr->value = builder.makeGetLocal(index, curr->type);
+      curr->value = builder.makeGetLocal(index, curr->value->type);
     }
   }
   void visitConst(Const *curr) {

@@ -4,32 +4,34 @@
     (local $x i32)
     (local $1 i32)
     (drop/i32
-      (block
-        (drop/i32
-          (i32.add
-            (set_local $x
-              (i32.const 10)
-            )
-            (i32.const 20)
-          )
+      (i32.add
+        (tee_local $x
+          (i32.const 10)
         )
-        (drop/i32
-          (i32.add
-            (block
-              (block
-                (set_local $1
-                  (i32.const 40)
-                )
-                (i32.store
-                  (i32.const 30)
-                  (get_local $1)
-                )
-              )
+        (i32.const 20)
+      )
+    )
+    (drop/i32
+      (i32.add
+        (block
+          (block
+            (tee_local $1
+              (i32.const 40)
+            )
+            (i32.store
+              (i32.const 30)
               (get_local $1)
             )
-            (i32.const 50)
           )
+          (get_local $1)
         )
+        (i32.const 50)
+      )
+    )
+    (block $block0
+      (i32.store
+        (i32.const 0)
+        (i32.const 1)
       )
     )
   )
