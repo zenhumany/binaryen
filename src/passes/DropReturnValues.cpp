@@ -61,7 +61,7 @@ struct DropReturnValues : public WalkerPass<PostWalker<DropReturnValues, Visitor
       // we must drop our value
       auto smallStack = expressionStack;
       smallStack.resize(i + 1);
-      if (!ExpressionAnalyzer::isResultUsed(expressionStack, getFunction())) {
+      if (!ExpressionAnalyzer::isResultUsed(smallStack, getFunction())) {
         // drop the value. but, it may have a side effect!
         replaceCurrent(Builder(*getModule()).makeSequence(
           Builder(*getModule()).makeDrop(curr->value), // value is first in order of operations, so just pull it out
