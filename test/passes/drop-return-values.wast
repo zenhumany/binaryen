@@ -17,6 +17,11 @@
         (get_local $x)
       )
     )
+    (block $out
+      (br $out (i32.const 0))
+      (i32.const 1)
+    )
+    (nop)
   )
 )
 

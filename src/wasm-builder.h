@@ -122,6 +122,13 @@ public:
     auto* ret = allocator.alloc<SetLocal>();
     ret->index = index;
     ret->value = value;
+    ret->type = none;
+    return ret;
+  }
+  SetLocal* makeTeeLocal(Index index, Expression* value) {
+    auto* ret = allocator.alloc<SetLocal>();
+    ret->index = index;
+    ret->value = value;
     ret->type = value->type;
     return ret;
   }

@@ -51,7 +51,40 @@ struct DropReturnValues : public WalkerPass<PostWalker<DropReturnValues, Visitor
     curr->finalize();
     maybeDrop(curr);
   }
-  // TODO? void visitBreak(Break *curr) {}
+  void visitBreak(Break *curr) {
+    if (!curr->value) return;
+    // we may use a block return value, and send values to it using breaks, but the block return
+    // value might be ignored. In that case, we'll drop() the block fallthrough, but we also
+    // need to not use block return values, as they will not match the lack of a fallthrough
+    auto check = [&](int i) {
+      // i is the index of a block or loop. we need to see if it is used. if it is not,
+      // we must drop our value
+      auto smallStack = expressionStack;
+      smallStack.resize(i + 1);
+      if (!ExpressionAnalyzer::isResultUsed(expressionStack, getFunction())) {
+        // drop the value. but, it may have a side effect!
+        replaceCurrent(Builder(*getModule()).makeSequence(
+          Builder(*getModule()).makeDrop(curr->value), // value is first in order of operations, so just pull it out
+          curr
+        ));
+        curr->value = nullptr;
+      }
+    };
+    for (int i = int(expressionStack.size()) - 1; i >= 0; i--) {
+      if (auto* block = expressionStack[i]->dynCast<Block>()) {
+        if (block->name == curr->name) {
+          check(i);
+          break;
+        }
+      } else if (auto* loop = expressionStack[i]->dynCast<Loop>()) {
+        if (loop->in == curr->name) break;
+        if (loop->out == curr->name) {
+          check(i);
+          break;
+        }
+      }
+    }
+  }
   void visitCall(Call *curr) {
     maybeDrop(curr);
   }
