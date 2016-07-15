@@ -84,5 +84,7 @@ int main(int argc, const char *argv[]) {
   Output output(options.extra["output"], Flags::Binary, options.debug ? Flags::Debug : Flags::Release);
   buffer.writeTo(output);
 
+  std::cerr << "Function body bits: " << (writer.bits) << ", bytes: " << (float(writer.bits)/8) << ", compared to normal wasm binary " << buffer.size() << " (" << (100.0 * (float(writer.bits)/8)/buffer.size()) << "%)\n" << std::endl;
+
   if (options.debug) std::cerr << "Done." << std::endl;
 }

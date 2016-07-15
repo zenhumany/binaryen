@@ -632,6 +632,8 @@ public:
     finishSection(start);
   }
 
+  Function* currFunction = nullptr;
+
   void writeFunctions() {
     if (wasm->functions.size() == 0) return;
     if (debug) std::cerr << "== writeFunctions" << std::endl;
@@ -658,7 +660,9 @@ public:
       if (numLocalsByType[f32]) o << U32LEB(numLocalsByType[f32]) << binaryWasmType(f32);
       if (numLocalsByType[f64]) o << U32LEB(numLocalsByType[f64]) << binaryWasmType(f64);
       depth = 0;
+      currFunction = function;
       recurse(function->body);
+      currFunction = nullptr;
       assert(depth == 0);
       size_t size = o.size() - start;
       assert(size <= std::numeric_limits<uint32_t>::max());
@@ -797,10 +801,30 @@ public:
 
   // AST writing via visitors
 
+  size_t bits = 0;
+
+  size_t bitsForNumOptions(size_t options) {
+    size_t ret = 0;
+    size_t pow = 1;
+    while (pow < options) {
+      ret += 1;
+      pow *= 2;
+    }
+    return ret;
+  }
+
+  template<typename LEBType>
+  size_t bitsFor(LEBType x) {
+    std::vector<uint8_t> temp;
+    x.write(&temp);
+    return temp.size() * 8;
+  }
+
   int depth; // only for debugging
 
   void recurse(Expression*& curr) {
     if (debug) std::cerr << "zz recurse into " << ++depth << " at " << o.size() << std::endl;
+    bits += 8; // the opcode
     visit(curr);
     if (debug) std::cerr << "zz recurse from " << depth-- << " at " << o.size() << std::endl;
   }
@@ -818,6 +842,7 @@ public:
     }
     breakStack.pop_back();
     o << int8_t(BinaryConsts::End);
+    bits += 8;
   }
 
   // emits a node, but if it is a block with no name, emit a list of its contents
@@ -841,11 +866,13 @@ public:
     breakStack.pop_back();
     if (curr->ifFalse) {
       o << int8_t(BinaryConsts::Else);
+    bits += 8;
       breakStack.push_back(IMPOSSIBLE_CONTINUE); // TODO ditto
       recursePossibleBlockContents(curr->ifFalse);
       breakStack.pop_back();
     }
     o << int8_t(BinaryConsts::End);
+    bits += 8;
   }
   void visitLoop(Loop *curr) {
     if (debug) std::cerr << "zz node: Loop" << std::endl;
@@ -856,6 +883,7 @@ public:
     breakStack.pop_back();
     breakStack.pop_back();
     o << int8_t(BinaryConsts::End);
+    bits += 8;
   }
 
   int32_t getBreakIndex(Name name) { // -1 if not found
@@ -876,6 +904,7 @@ public:
     if (curr->condition) recurse(curr->condition);
     o << int8_t(curr->condition ? BinaryConsts::BrIf : BinaryConsts::Br)
       << U32LEB(curr->value ? 1 : 0) << U32LEB(getBreakIndex(curr->name));
+    bits += 1 + bitsForNumOptions(breakStack.size());
   }
   void visitSwitch(Switch *curr) {
     if (debug) std::cerr << "zz node: Switch" << std::endl;
@@ -884,10 +913,13 @@ public:
     }
     recurse(curr->condition);
     o << int8_t(BinaryConsts::TableSwitch) << U32LEB(curr->value ? 1 : 0) << U32LEB(curr->targets.size());
+    bits += 1 + bitsFor(U32LEB(curr->targets.size()));
     for (auto target : curr->targets) {
       o << uint32_t(getBreakIndex(target));
+      bits += bitsForNumOptions(breakStack.size());
     }
     o << uint32_t(getBreakIndex(curr->default_));
+    bits += bitsForNumOptions(breakStack.size());
   }
   void visitCall(Call *curr) {
     if (debug) std::cerr << "zz node: Call" << std::endl;
@@ -895,6 +927,7 @@ public:
       recurse(operand);
     }
     o << int8_t(BinaryConsts::CallFunction) << U32LEB(curr->operands.size()) << U32LEB(getFunctionIndex(curr->target));
+    bits += bitsFor(U32LEB(curr->operands.size())) + bitsForNumOptions(wasm->functions.size());
   }
   void visitCallImport(CallImport *curr) {
     if (debug) std::cerr << "zz node: CallImport" << std::endl;
@@ -902,6 +935,7 @@ public:
       recurse(operand);
     }
     o << int8_t(BinaryConsts::CallImport) << U32LEB(curr->operands.size()) << U32LEB(getImportIndex(curr->target));
+    bits += bitsFor(U32LEB(curr->operands.size())) + bitsForNumOptions(wasm->imports.size());
   }
   void visitCallIndirect(CallIndirect *curr) {
     if (debug) std::cerr << "zz node: CallIndirect" << std::endl;
@@ -910,20 +944,24 @@ public:
       recurse(operand);
     }
     o << int8_t(BinaryConsts::CallIndirect) << U32LEB(curr->operands.size()) << U32LEB(getFunctionTypeIndex(curr->fullType));
+    bits += bitsFor(U32LEB(curr->operands.size())) + bitsForNumOptions(wasm->functionTypes.size());
   }
   void visitGetLocal(GetLocal *curr) {
     if (debug) std::cerr << "zz node: GetLocal " << (o.size() + 1) << std::endl;
     o << int8_t(BinaryConsts::GetLocal) << U32LEB(mappedLocals[curr->index]);
+    bits += bitsForNumOptions(currFunction->getNumLocals());
   }
   void visitSetLocal(SetLocal *curr) {
     if (debug) std::cerr << "zz node: SetLocal" << std::endl;
     recurse(curr->value);
     o << int8_t(BinaryConsts::SetLocal) << U32LEB(mappedLocals[curr->index]);
+    bits += bitsForNumOptions(currFunction->getNumLocals());
   }
 
   void emitMemoryAccess(size_t alignment, size_t bytes, uint32_t offset) {
     o << U32LEB(Log2(alignment ? alignment : bytes));
     o << U32LEB(offset);
+    bits += 3 + bitsFor(U32LEB(offset));
   }
 
   void visitLoad(Load *curr) {
@@ -990,18 +1028,22 @@ public:
     switch (curr->type) {
       case i32: {
         o << int8_t(BinaryConsts::I32Const) << S32LEB(curr->value.geti32());
+        bits += bitsFor(S32LEB(curr->value.geti32()));
         break;
       }
       case i64: {
         o << int8_t(BinaryConsts::I64Const) << S64LEB(curr->value.geti64());
+        bits += bitsFor(S64LEB(curr->value.geti64()));
         break;
       }
       case f32: {
         o << int8_t(BinaryConsts::F32Const) << curr->value.getf32();
+        bits += 32;
         break;
       }
       case f64: {
         o << int8_t(BinaryConsts::F64Const) << curr->value.getf64();
+        bits += 64;
         break;
       }
       default: abort();
@@ -1163,6 +1205,7 @@ public:
       recurse(curr->value);
     }
     o << int8_t(BinaryConsts::Return) << U32LEB(curr->value ? 1 : 0);
+    bits += 1;
   }
   void visitHost(Host *curr) {
     if (debug) std::cerr << "zz node: Host" << std::endl;
