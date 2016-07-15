@@ -822,9 +822,16 @@ public:
 
   int depth; // only for debugging
 
+  bool poppingImpossible = false; // set to true when nothing can pop, so no binaries etc., like at the start of a block or after a non-returning operator
+
   void recurse(Expression*& curr) {
     if (debug) std::cerr << "zz recurse into " << ++depth << " at " << o.size() << std::endl;
-    bits += 8; // the opcode
+    if (poppingImpossible) {
+      bits += 4; // non-popping opcode, only 15 of these
+      poppingImpossible = false;
+    } else {
+      bits += 8; // normal opcode, 168 of these
+    }
     visit(curr);
     if (debug) std::cerr << "zz recurse from " << depth-- << " at " << o.size() << std::endl;
   }
@@ -834,14 +841,17 @@ public:
   void visitBlock(Block *curr) {
     if (debug) std::cerr << "zz node: Block" << std::endl;
     o << int8_t(BinaryConsts::Block);
+    poppingImpossible = true;
     breakStack.push_back(curr->name);
     size_t i = 0;
     for (auto* child : curr->list) {
       if (debug) std::cerr << "  " << size_t(curr) << "\n zz Block element " << i++ << std::endl;
       recurse(child);
+      poppingImpossible = true;
     }
     breakStack.pop_back();
     o << int8_t(BinaryConsts::End);
+    poppingImpossible = false;
     bits += 8;
   }
 
@@ -852,9 +862,12 @@ public:
       recurse(curr);
       return;
     }
+    poppingImpossible = true;
     for (auto* child : block->list) {
       recurse(child);
+      poppingImpossible = true;
     }
+    poppingImpossible = false;
   }
 
   void visitIf(If *curr) {
