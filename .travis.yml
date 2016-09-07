@@ -12,6 +12,13 @@ matrix:
         apt:
           sources: ['ubuntu-toolchain-r-test']
           packages: ['cmake', 'nodejs', 'g++-5']
+    addons:
+      apt:
+        sources:
+          - george-edison55-precise-backports # cmake 3.2.3 / doxygen 1.8.3
+        packages:
+          - cmake
+          - cmake-data
 
     - env: CC_COMPILER="./test/wasm-install/wasm-install/bin/clang" CXX_COMPILER="./test/wasm-install/wasm-install/bin/clang++" COMPILER_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fsanitize-blacklist=`pwd`/ubsan.blacklist"
       compiler: clang
