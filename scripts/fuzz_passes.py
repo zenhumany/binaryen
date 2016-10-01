@@ -43,7 +43,7 @@ PASSES = [
     "coalesce-locals",
     "reorder-locals",
     "merge-blocks",
-    "remove-unused-functions",
+    "module-vacuum",
 ]
 
 # main

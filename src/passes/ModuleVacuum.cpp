@@ -27,7 +27,33 @@
 
 namespace wasm {
 
-struct RemoveUnusedFunctions : public Pass {
+struct ModuleAnalyzer : public PostWalker<ModuleAnalyzer, Visitor<ModuleAnalyzer>> {
+  Module *module;
+  std::vector<Function*> queue;
+  std::unordered_set<Function*> reachable;
+
+  ModuleAnalyzer(Module* module, const std::vector<Function*>& root) : module(module) {
+    for (auto* curr : root) {
+      queue.push_back(curr);
+    }
+    while (queue.size()) {
+      auto* curr = queue.back();
+      queue.pop_back();
+      if (reachable.count(curr) == 0) {
+        reachable.insert(curr);
+        walk(curr->body);
+      }
+    }
+  }
+  void visitCall(Call *curr) {
+    auto* target = module->getFunction(curr->target);
+    if (reachable.count(target) == 0) {
+      queue.push_back(target);
+    }
+  }
+};
+
+struct ModuleVacuum : public Pass {
   void run(PassRunner* runner, Module* module) override {
     std::vector<Function*> root;
     // Module start is a root.
@@ -45,7 +71,7 @@ struct RemoveUnusedFunctions : public Pass {
       }
     }
     // Compute function reachability starting from the root set.
-    DirectCallGraphAnalyzer analyzer(module, root);
+    ModuleAnalyzer analyzer(module, root);
     // Remove unreachable functions.
     auto& v = module->functions;
     v.erase(std::remove_if(v.begin(), v.end(), [&](const std::unique_ptr<Function>& curr) {
@@ -56,8 +82,8 @@ struct RemoveUnusedFunctions : public Pass {
   }
 };
 
-Pass *createRemoveUnusedFunctionsPass() {
-  return new RemoveUnusedFunctions();
+Pass *createModuleVacuumPass() {
+  return new ModuleVacuum();
 }
 
 } // namespace wasm
