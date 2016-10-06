@@ -237,6 +237,43 @@ struct UniqueNameMapper {
     labelMappings.clear();
     reverseLabelMapping.clear();
   }
+
+  // Given an expression, ensures all names are unique
+  static void uniquify(Expression* curr) {
+    struct Walker : public ControlFlowWalker<Walker, Visitor<Walker>> {
+      UniqueNameMapper mapper;
+
+      static void doPreVisitControlFlow(Walker* self, Expression** currp) {
+        auto* curr = *currp;
+        if (auto* block = curr->dynCast<Block>()) {
+          if (block->name.is()) block->name = self->mapper.pushLabelName(block->name);
+        } else if (auto* loop = curr->dynCast<Loop>()) {
+          if (loop->name.is()) loop->name = self->mapper.pushLabelName(loop->name);
+        }
+      }
+      static void doPostVisitControlFlow(Walker* self, Expression** currp) {
+        auto* curr = *currp;
+        if (auto* block = curr->dynCast<Block>()) {
+          if (block->name.is()) self->mapper.popLabelName(block->name);
+        } else if (auto* loop = curr->dynCast<Loop>()) {
+          if (loop->name.is()) self->mapper.popLabelName(loop->name);
+        }
+      }
+
+      void visitBreak(Break *curr) {
+        curr->name = mapper.sourceToUnique(curr->name);
+      }
+      void visitSwitch(Switch *curr) {
+        for (auto& target : curr->targets) {
+          target = mapper.sourceToUnique(target);
+        }
+        curr->default_ = mapper.sourceToUnique(curr->default_);
+      }
+    };
+
+    Walker walker;
+    walker.walk(curr);
+  }
 };
 
 } // namespace wasm

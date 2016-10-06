@@ -54,6 +54,7 @@ BIN_DIR = os.path.abspath(os.path.join(WATERFALL_BUILD_DIR, 'wasm-install', 'bin
 os.environ['BINARYEN'] = os.getcwd()
 
 def fetch_waterfall():
+  return
   rev = open(os.path.join('test', 'revision')).read().strip()
   buildername = { 'linux2':'linux',
                   'darwin':'mac',
