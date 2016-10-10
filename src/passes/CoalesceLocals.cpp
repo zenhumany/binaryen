@@ -31,6 +31,7 @@
 #include "ast_utils.h"
 #include "cfg/cfg-traversal.h"
 #include "support/learning.h"
+#include "support/permutations.h"
 #ifdef CFG_PROFILE
 #include "support/timing.h"
 #endif
@@ -490,35 +491,6 @@ void CoalesceLocals::pickIndicesFromOrder(std::vector<Index>& order, std::vector
       newCopies[found * numLocals + j] += getCopies(actual, j);
     }
   }
-}
-
-// Utilities for operating on permutation vectors
-
-static std::vector<Index> makeIdentity(Index num) {
-  std::vector<Index> ret;
-  ret.resize(num);
-  for (Index i = 0; i < num; i++) {
-    ret[i] = i;
-  }
-  return ret;
-}
-
-static void setIdentity(std::vector<Index>& ret) {
-  auto num = ret.size();
-  assert(num > 0); // must already be of the right size
-  for (Index i = 0; i < num; i++) {
-    ret[i] = i;
-  }
-}
-
-static std::vector<Index> makeReversed(std::vector<Index>& original) {
-  std::vector<Index> ret;
-  auto num = original.size();
-  ret.resize(num);
-  for (Index i = 0; i < num; i++) {
-    ret[original[i]] = i;
-  }
-  return ret;
 }
 
 // given a baseline order, adjust it based on an important order of priorities (higher values

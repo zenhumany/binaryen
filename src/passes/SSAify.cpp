@@ -24,29 +24,42 @@
 
 #include "wasm.h"
 #include "pass.h"
-#include "cfg/cfg-traversal.h"
+#include "support/permutations.h"
 
 namespace wasm {
 
-// Helper classes
+// Helper class, tracks assignments to locals, assuming single-assignment form, i.e.,
+// each assignment creates a new variable.
 
-struct SetLocalCounter : public PostWalker<SetLocalCounter, Visitor<SetLocalCounter>> {
-  std::vector<Index>* numSetLocals;
+struct SetTrackingWalker : public PostWalker<SetTrackingWalker, Visitor<SetTrackingWalker>> {
+  std::vector<Index> oldToNew; // old local id => id of the new SSA assignment to it
+  Index nextIndex;
 
-  SetLocalCounter(std::vector<Index>* numSetLocals, Function* func) : numSetLocals(numSetLocals) {
-    numSetLocals.resize(func->getNumLocals());
-    std::fill(numSetLocals.begin(), numSetLocals.end(), 0);
+  SetTrackingWalker(Function* func) {
+    // We begin with each param being assigned from the incoming value, and the zero-init for the locals,
+    // so the initial state is the identity permutation
+    oldToNew.resize(func->getNumLocals());
+    setIdentity(oldToNew);
+    nextIndex = func->getNumLocals();
     walk(func->body);
   }
 
   void visitSetLocal(SetLocal *curr) {
-    (*numSetLocals)[curr->index]++;
+    oldToNew[curr->index] = nextIndex++;
   }
 
+  // branches, joins, etc.
 };
+
+child class that finds out which loop incoming vars need a phi
+
+second child class that does the second pass and finishees it all
+
 
 struct BlockInfo {
 };
+
+CFG walker? normal walkser is ok
 
 struct SSAify : public WalkerPass<CFGWalker<SSAify, Visitor<SSAify>, BlockInfo>> {
   bool isFunctionParallel() override { return true; }
