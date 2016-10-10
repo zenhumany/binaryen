@@ -47,6 +47,7 @@ Pass *createRemoveUnusedNamesPass();
 Pass *createReorderFunctionsPass();
 Pass *createReorderLocalsPass();
 Pass *createSimplifyLocalsPass();
+Pass *createSSAifyPass();
 Pass *createVacuumPass();
 Pass *createPrecomputePass();
 //Pass *createLowerInt64Pass();

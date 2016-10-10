@@ -87,6 +87,7 @@ void PassRegistry::registerPasses() {
   registerPass("reorder-functions", "sorts functions by access frequency", createReorderFunctionsPass);
   registerPass("reorder-locals", "sorts locals by access frequency", createReorderLocalsPass);
   registerPass("simplify-locals", "miscellaneous locals-related optimizations", createSimplifyLocalsPass);
+  registerPass("ssa", "ssa-ify variables so that they have a single assignment", createSSAifyPass);
   registerPass("vacuum", "removes obviously unneeded code", createVacuumPass);
   registerPass("precompute", "computes compile-time evaluatable expressions", createPrecomputePass);
 //  registerPass("lower-i64", "lowers i64 into pairs of i32s", createLowerInt64Pass);
