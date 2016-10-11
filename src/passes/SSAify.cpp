@@ -37,13 +37,14 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
   struct BreakInfo {
     NameMapping mapping;
     Expression** origin; // the node performing the break - a phi must happen right before this node's jump operation
+    BreakInfo(NameMapping&& mapping, Expression** origin) : mapping(mapping), origin(origin) {}
   };
 
   Index numLocals;
   NameMapping currMapping;
   Index nextIndex;
   std::vector<NameMapping> mappingStack; // used in ifs, loops
-  std::map<Name, std::vector<BreakInfo<> breakInfos; // break target => infos that reach it
+  std::map<Name, std::vector<BreakInfo>> breakInfos; // break target => infos that reach it
 
   SetTrackingWalker(Function* func) {
     numLocals = func->getNumLocals();
@@ -56,13 +57,13 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
     walk(func->body);
   }
 
-  void visitBlock(Block *curr) {
-    if (curr->name.is() && breakInfos.find(curr->name) != breakInfos.end()) {
+  void doVisitBlock(SubType* self, Expression** currp) {
+    Block* curr = (*currp)->cast<Block>();
+    if (curr->name.is() && self->breakInfos.find(curr->name) != self->breakInfos.end()) {
       // merge all incoming
-      auto& infos = breakInfos[curr->name];
-      for (auto& info : infos) {
-        merge(currMapping, info.mapping, curr - need replaceCurrent, info.origin);
-      }
+      auto& infos = self->breakInfos[curr->name];
+      infos.emplace_back(currMapping, currp);
+      currMapping = std::move(self->merge(infos));
     }
   }
   void ifCondition(If *curr) {
@@ -144,19 +145,27 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
     return mapping[0] == Index(-1);
   }
 
-  void merge(NameMapping& into, NameMapping& from) {
-    if (isUnreachable(into)) {
-      into.swap(from);
-      return;
-    }
-    if (isUnreachable(from)) return;
+  // merges a bunch of infos into one. where necessary calls a phi hook.
+  NameMapping& merge(std::vector<BreakInfo>& infos) {
+    auto& out = infos[0];
     for (Index i = 0; i < numLocals; i++) {
-      if (into[i] != from[i]) {
-        // we need a phi here
-        into[i] = nextIndex++;
-        // TODO: requestPhi
+      Index seen = -1;
+      for (auto& info : infos) {
+        if (isUnreachable(info.mapping)) continue;
+        if (seen == -1) {
+          seen = info.mapping[i];
+        } else {
+          if (info.mapping[i] != seen) {
+            // we need a phi here
+            seen = nextIndex++;
+            createPhi(infos, i, seen);
+            break;
+          }
+        }
       }
+      out.mapping[i] = seen;
     }
+    return out.mapping;
   }
 };
 
