@@ -28,7 +28,7 @@
 
 namespace wasm {
 
-// Helper class, tracks assignments to locals, assuming single-assignment form, i.e.,
+// Tracks assignments to locals, assuming single-assignment form, i.e.,
 // each assignment creates a new variable.
 
 struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
@@ -36,8 +36,15 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
 
   struct BreakInfo {
     NameMapping mapping;
-    Expression** origin; // the node performing the break - a phi must happen right before this node's jump operation
-    BreakInfo(NameMapping&& mapping, Expression** origin) : mapping(mapping), origin(origin) {}
+    Expression** origin; // the origin of a node where a phi would go. note that *origin can be nullptr, in which case we can just fill it
+    enum PhiType {
+      Before = 0,  // a phi should go right before the origin (e.g., origin is a loop and this is the entrance)
+      After = 1,   // a phi should go right after the origin (e.g. this is an if body)
+      Internal = 2 // origin is the breaking instruction itself, we must add the phi internally (depending on if the break is condition or has a value, etc.,
+                   //                                                                            or for a block as the last instruction)
+    } type;
+    // TODO: move semantics?
+    BreakInfo(NameMapping mapping, Expression** origin, PhiType type) : mapping(mapping), origin(origin), type(type) {}
   };
 
   Index numLocals;
@@ -58,42 +65,66 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
   }
 
   void doVisitBlock(SubType* self, Expression** currp) {
-    Block* curr = (*currp)->cast<Block>();
+    auto* curr = (*currp)->cast<Block>();
     if (curr->name.is() && self->breakInfos.find(curr->name) != self->breakInfos.end()) {
-      // merge all incoming
       auto& infos = self->breakInfos[curr->name];
-      infos.emplace_back(currMapping, currp);
+      infos.emplace_back(currMapping, currp, BreakInfo::Internal);
       currMapping = std::move(self->merge(infos));
     }
   }
-  void ifCondition(If *curr) {
-    mappingStack.push_back(currMapping);
+  static void doIfCondition(SubType* self, Expression** currp) {
+    auto* curr = (*curr)->cast<If>();
+    if (!curr->ifFalse) {
+      mappingStack.push_back(currMapping);
+    }
   }
-  void ifTrue(If *curr) {
+  static void doIfTrue(SubType* self, Expression** currp) {
+    auto* curr = (*curr)->cast<If>();
     if (curr->ifFalse) {
       mappingStack.push_back(currMapping);
     } else {
       // that's it for this if, merge
-      merge(currMapping, mappingStack.back(), &curr->ifFalse);
+      std::vector<BreakInfo> breaks;
+      breaks.emplace_back(currMapping, &curr->ifFalse, BreakInfo::After);
+      breaks.emplace_back(mappingStack.back(), &curr->condition, BreakInfo::After);
       mappingStack.pop_back();
+      currMapping = std::move(merge(breaks));
     }
   }
-  void ifFalse(If *curr) {
-    merge(currMapping, mappingStack.back());
+  static void doIfFalse(SubType* self, Expression** currp) {
+    auto* curr = (*curr)->cast<If>();
+    std::vector<BreakInfo> breaks;
+    breaks.emplace_back(currMapping, &curr->ifFalse, BreakInfo::After);
+    breaks.emplace_back(mappingStack.back(), &curr->ifTrue, BreakInfo::After);
+    mappingStack.pop_back();
+    currMapping = std::move(merge(breaks));
+  }
+  static void doPreLoop(SubType* self, Expression** currp) {
+    // save the state before entering the loop, for calculation later of the merge at the loop top
+    mappingStack.push_back(currMapping);
+  }
+  static void doVisitLoop(SubType* self, Expression** currp) {
+    auto* curr = (*currp)->cast<Loop>();
+    if (curr->name.is() && self->breakInfos.find(curr->name) != self->breakInfos.end()) {
+      auto& infos = self->breakInfos[curr->name];
+      infos.emplace_back(mappingStack.back(), currp, BreakInfo::Before);
+      self->merge(infos); // output is not assigned anywhere, this is an interesting code path
+    }
     mappingStack.pop_back();
   }
-  void preLoop(Loop *curr) {
-  }
-  void visitLoop(Loop *curr) {
-  }
-  void visitBreak(Break *curr) {
-    ...
-    if (!curr->condition) {
+  static void visitBreak(SubType* self, Expression** currp) {
+    breakInfos[curr->name].emplace_back(currMapping, currp, BreakInfo::Internal);
+    if (!(*currp)->cast<Break>()->condition) {
       setUnreachable(currMapping);
     }
   }
-  void visitSwitch(Switch *curr) {
-    ...
+  static void visitSwitch(SubType* self, Expression** currp) {
+    auto* curr = (*currp)->cast<Switch>();
+    XXX: do this for unique names
+    for (auto target : curr->targets) {
+      breakInfos[target].emplace_back(currMapping, currp, BreakInfo::Switch, need name here);
+    }
+    breakInfos[target].emplace_back(currMapping, currp, BreakInfo::Switch, need name here);
     setUnreachable(currMapping);
   }
   void visitReturn(Return *curr) {
@@ -108,11 +139,6 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
   }
 
   // traversal
-
-  static void doIfCondition(SubType* self, Expression** currp) { self->ifCondition((*currp)->cast<Loop>()); }
-  static void doIfTrue(SubType* self, Expression** currp) { self->ifTrue((*currp)->cast<Loop>()); }
-  static void doIfFalse(SubType* self, Expression** currp) { self->ifFalse((*currp)->cast<Loop>()); }
-  static void doPreLoop(SubType* self, Expression** currp) { self->preLoop((*currp)->cast<Loop>()); }
 
   static void scan(SubType* self, Expression** currp) {
     if (auto* iff = (*currp)->dynCast<If>()) {
@@ -166,6 +192,10 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
       out.mapping[i] = seen;
     }
     return out.mapping;
+  }
+
+  void createPhi(std::vector<BreakInfo>& infos, Index old, Index new_) {
+    abort(); // override this in child classes
   }
 };
 
