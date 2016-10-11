@@ -64,12 +64,14 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
     walk(func->body);
   }
 
+  // control flow
+
   void doVisitBlock(SubType* self, Expression** currp) {
     auto* curr = (*currp)->cast<Block>();
     if (curr->name.is() && self->breakInfos.find(curr->name) != self->breakInfos.end()) {
       auto& infos = self->breakInfos[curr->name];
-      infos.emplace_back(currMapping, currp, BreakInfo::Internal);
-      currMapping = std::move(self->merge(infos));
+      infos.emplace_back(std::move(currMapping), currp, BreakInfo::Internal);
+      currMapping = std::move(self->merge(infos), curr->name);
     }
   }
   static void doIfCondition(SubType* self, Expression** currp) {
@@ -85,7 +87,7 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
     } else {
       // that's it for this if, merge
       std::vector<BreakInfo> breaks;
-      breaks.emplace_back(currMapping, &curr->ifFalse, BreakInfo::After);
+      breaks.emplace_back(std::move(currMapping), &curr->ifFalse, BreakInfo::After);
       breaks.emplace_back(mappingStack.back(), &curr->condition, BreakInfo::After);
       mappingStack.pop_back();
       currMapping = std::move(merge(breaks));
@@ -94,7 +96,7 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
   static void doIfFalse(SubType* self, Expression** currp) {
     auto* curr = (*curr)->cast<If>();
     std::vector<BreakInfo> breaks;
-    breaks.emplace_back(currMapping, &curr->ifFalse, BreakInfo::After);
+    breaks.emplace_back(std::move(currMapping), &curr->ifFalse, BreakInfo::After);
     breaks.emplace_back(mappingStack.back(), &curr->ifTrue, BreakInfo::After);
     mappingStack.pop_back();
     currMapping = std::move(merge(breaks));
@@ -108,23 +110,26 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
     if (curr->name.is() && self->breakInfos.find(curr->name) != self->breakInfos.end()) {
       auto& infos = self->breakInfos[curr->name];
       infos.emplace_back(mappingStack.back(), currp, BreakInfo::Before);
-      self->merge(infos); // output is not assigned anywhere, this is an interesting code path
+      self->merge(infos, curr->name); // output is not assigned anywhere, this is an interesting code path
     }
     mappingStack.pop_back();
   }
   static void visitBreak(SubType* self, Expression** currp) {
-    breakInfos[curr->name].emplace_back(currMapping, currp, BreakInfo::Internal);
+    breakInfos[curr->name].emplace_back(std::move(currMapping), currp, BreakInfo::Internal);
     if (!(*currp)->cast<Break>()->condition) {
       setUnreachable(currMapping);
     }
   }
   static void visitSwitch(SubType* self, Expression** currp) {
     auto* curr = (*currp)->cast<Switch>();
-    XXX: do this for unique names
+    std::set<Name> all;
     for (auto target : curr->targets) {
-      breakInfos[target].emplace_back(currMapping, currp, BreakInfo::Switch, need name here);
+      all.insert(target);
     }
-    breakInfos[target].emplace_back(currMapping, currp, BreakInfo::Switch, need name here);
+    all.insert(curr->default_);
+    for (auto target : all) {
+      breakInfos[curr->default_].emplace_back(currMapping, currp, BreakInfo::Switch);
+    }
     setUnreachable(currMapping);
   }
   void visitReturn(Return *curr) {
@@ -133,6 +138,8 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
   void visitUnreachable(Unreachable *curr) {
     setUnreachable(currMapping);
   }
+
+  // assignments
 
   void visitSetLocal(SetLocal *curr) {
     currMapping[curr->index] = nextIndex++; // a new assignment, trample the old
@@ -164,6 +171,7 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
   // helpers
 
   void setUnreachable(NameMapping& mapping) {
+    mapping.resize(numLocals); // may have been emptied by a move
     mapping[0] = Index(-1);
   }
 
@@ -172,7 +180,7 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
   }
 
   // merges a bunch of infos into one. where necessary calls a phi hook.
-  NameMapping& merge(std::vector<BreakInfo>& infos) {
+  NameMapping& merge(std::vector<BreakInfo>& infos, Name name = Name()) {
     auto& out = infos[0];
     for (Index i = 0; i < numLocals; i++) {
       Index seen = -1;
@@ -184,7 +192,7 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
           if (info.mapping[i] != seen) {
             // we need a phi here
             seen = nextIndex++;
-            createPhi(infos, i, seen);
+            createPhi(infos, i, seen, name);
             break;
           }
         }
@@ -194,47 +202,34 @@ struct SetTrackingWalker : public PostWalker<SubType, Visitor<SubType>> {
     return out.mapping;
   }
 
-  void createPhi(std::vector<BreakInfo>& infos, Index old, Index new_) {
+  void createPhi(std::vector<BreakInfo>& infos, Index old, Index new_, Name name) {
     abort(); // override this in child classes
   }
 };
 
-child class that finds out which loop incoming vars need a phi
+struct LoopPhiFinder : public SetTrackingWalker<LoopPhiFinder, Visitor<LoopPhiFinder>> {
+  std::map<Name, std::vector<Index>> loopPhis; // loop name => list of source indexes that need a phi
 
-second child class that does the second pass and finishees it all
+  LoopPhiFinder(Function* func) : SetTrackingWalker(func) {}
 
-
-struct BlockInfo {
+  void createPhi(std::vector<BreakInfo>& infos, Index old, Index new_, Name name) {
+    for (auto& info : infos) {
+      if (info.type == BreakInfo::Before) {
+        auto* loop = (*info.origin)->cast<Loop>();
+        loopPhis[loop->name].push_back(old);
+      }
+    }
+  }
 };
 
-CFG walker? normal walkser is ok
-
-struct SSAify : public WalkerPass<CFGWalker<SSAify, Visitor<SSAify>, BlockInfo>> {
+struct SSAify : public Pass {
   bool isFunctionParallel() override { return true; }
 
   Pass* create() override { return new SSAify; }
 
-  std::vector<Index> numSetLocals;
-
-  bool hasTooManySets(Index index) {
-    // parameters are assigned on entry
-hmmf, there is the zero-init assign to locals too...  
-    if (getFunction()->isParam(index)) {
-      return numSetLocals[index] > 0;
-    } else {
-      return numSetLocals[index] > 1;
-    }
-  }
-
-  void visitGetLocal(GetLocal* curr) {
-    if (numSetLocals[curr->index]
-  }
-
-  void doWalkFunction(Function* func) {
+  void runFunction(PassRunner* runner, Module* module, Function* function) override {
     // count how many set_locals each local has. if it already has just 1, we can ignore it.
-    SetLocalCounter counter(&numSetLocals, func);
-    // main pass
-    CFGWalker<SetLocalCounter, Visitor<SetLocalCounter>>::doWalkFunction(func);
+    LoopPhiFinder finder(&numSetLocals, func);
   }
 };
 
