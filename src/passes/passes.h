@@ -29,6 +29,7 @@ Pass *createDuplicateFunctionEliminationPass();
 Pass *createExtractFunctionPass();
 Pass *createFullPrinterPass();
 Pass *createLegalizeJSInterfacePass();
+Pass *createLoopVarSplittingPass();
 Pass *createLowerIfElsePass();
 Pass *createMinifiedPrinterPass();
 Pass *createMergeBlocksPass();

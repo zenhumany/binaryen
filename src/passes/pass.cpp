@@ -69,6 +69,7 @@ void PassRegistry::registerPasses() {
   registerPass("duplicate-function-elimination", "removes duplicate functions", createDuplicateFunctionEliminationPass);
   registerPass("extract-function", "leaves just one function (useful for debugging)", createExtractFunctionPass);
   registerPass("legalize-js-interface", "legalizes i64 types on the import/export boundary", createLegalizeJSInterfacePass);
+  registerPass("loop-var-splitting", "splits critical loop variables, allowing better optimizations", createLoopVarSplittingPass);
   registerPass("merge-blocks", "merges blocks to their parents", createMergeBlocksPass);
   registerPass("metrics", "reports metrics", createMetricsPass);
   registerPass("nm", "name list", createNameListPass);
@@ -106,6 +107,7 @@ void PassRunner::addDefaultFunctionOptimizationPasses() {
   add("remove-unused-names");
   add("optimize-instructions");
   add("precompute");
+  if (options.shrinkLevel == 0) add("loop-var-splitting"); // split them, then simplify can move them, and coalesce can merge them
   add("simplify-locals");
   add("vacuum"); // previous pass creates garbage
   add("reorder-locals");

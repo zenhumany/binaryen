@@ -5,6 +5,7 @@ SET(passes_SOURCES
   DuplicateFunctionElimination.cpp
   ExtractFunction.cpp
   LegalizeJSInterface.cpp
+  LoopVarSplitting.cpp
   MergeBlocks.cpp
   Metrics.cpp
   NameManager.cpp
