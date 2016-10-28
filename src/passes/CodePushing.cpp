@@ -41,12 +41,11 @@ public:
     // Find an optimization segment: from the first pushable thing, to the first
     // point past which we want to push. We then push in that range before
     // continuing forward.
-    Index relevant = list.size() - 1; // we never need to push past a final element, as
-                                      // we couldn't be used after it.
+    Index size = list.size();
     Index nothing = -1;
     Index i = 0;
     Index firstPushable = nothing;
-    while (i < relevant) {
+    while (i < size) {
       if (firstPushable == nothing && isPushable(list[i])) {
         firstPushable = i;
         i++;
@@ -105,6 +104,9 @@ private:
     std::unique_ptr<GetLocalCounter> ifTrueCounter, ifFalseCounter;
     std::vector<SetLocal*> toPushToIfTrue, toPushToIfFalse;
     Builder builder(*module);
+    // if this is the last element, and it has a non-void type, we can't push past it (only into it)
+    bool canPushPast = true;
+    if (pushPointExpr == list.back() && pushPointExpr->type != none) canPushPast = false;
     // loop
     Index i = pushPoint - 1;
     while (1) {
@@ -115,8 +117,8 @@ private:
           pushableEffects.emplace(pushable, pushable);
         }
         auto& effects = pushableEffects[pushable];
-        if (cumulativeEffects.invalidates(effects)) {
-          // we can't push this
+        if (!canPushPast || cumulativeEffects.invalidates(effects)) {
+          // we can't push this past
           bool stays = true;
           if (iff) {
             // we can't push *past* the if, but maybe we can push
@@ -132,7 +134,7 @@ private:
                   toPushToIfTrue.push_back(pushable);
                   list[i] = builder.makeNop();
                   stays = false;
-                } else if (iff->ifFalse) {
+                } else if (iff->ifFalse && ifTrueCounter->numGets[index] == 0) { // if any gets in ifTrue, no point in ifFalse
                   ifFalseCounter = make_unique<GetLocalCounter>(function, iff->ifFalse);
                   if (ifFalseCounter->numGets[index] == analyzer.getNumGets(index)) {
                     // all uses are in the ifFalse, good
@@ -248,10 +250,9 @@ struct CodePushing : public WalkerPass<PostWalker<CodePushing, Visitor<CodePushi
   }
 
   void visitBlock(Block* curr) {
-    // Pushing code only makes sense if we are size 3 or above: we need
-    // one element to push, an element to push it past, and an element to use
-    // what we pushed.
-    if (curr->list.size() < 3) return;
+    // Pushing code only makes sense if we are size 2 or above: we need
+    // one element to push, an element to push it past
+    if (curr->list.size() < 2) return;
     // At this point in the postorder traversal we have gone through all our children.
     // Therefore any variable whose gets seen so far is equal to the total gets must
     // have no further users after this block. And therefore when we see an SFA
@@ -262,6 +263,7 @@ struct CodePushing : public WalkerPass<PostWalker<CodePushing, Visitor<CodePushi
     // push it past a use).
     Pusher pusher(curr, analyzer, numGetsSoFar, getModule(), getFunction());
     // if we pushed into an if, we need another cycle to continue pushing inside it
+    // TODO: only do more cycles if optimizeLevel > ?
     if (pusher.pushedIntoIf) anotherCycle = true;
   }
 };

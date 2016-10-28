@@ -49,20 +49,34 @@
       (drop (get_local $y))
     )
   )
-  (func $ignore-last
+  (func $last
     (local $x i32)
     (block $out
       (set_local $x (i32.const 1))
       (br_if $out (i32.const 2))
     )
   )
-  (func $ignore-last2
+  (func $last2
     (local $x i32)
     (block $out
       (set_local $x (i32.const 1))
       (nop)
       (nop)
       (br_if $out (i32.const 2))
+    )
+  )
+  (func $last-badtype (result i32)
+    (local $x i32)
+    (block $out i32
+      (set_local $x (i32.const 1))
+      (br_if $out (i32.const 2) (i32.const 3))
+    )
+  )
+  (func $last-badtype2 (result i32)
+    (local $x i32)
+    (block $out i32
+      (set_local $x (i32.const 1))
+      (br_if $out (i32.const 2) (br $out (i32.const 3)))
     )
   )
   (func $push-if
@@ -213,6 +227,30 @@
       (drop (get_local $y))
     )
     (drop (get_local $x)) ;; $x can't be pushed, but y doesn't care
+  )
+  (func $into-if
+    (local $x i32)
+    (local $y i32)
+    (local $z i32)
+    (block $out
+      (set_local $x (i32.const 1))
+      (if
+        (i32.const 2)
+        (drop (get_local $x))
+      )
+      (set_local $y (i32.const 3))
+      (if
+        (i32.const 4)
+        (drop (get_local $y))
+        (nop)
+      )
+      (set_local $z (i32.const 5))
+      (if
+        (i32.const 6)
+        (nop)
+        (drop (get_local $z))
+      )
+    )
   )
 )
 

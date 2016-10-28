@@ -96,27 +96,53 @@
       )
     )
   )
-  (func $ignore-last (type $0)
+  (func $last (type $0)
     (local $x i32)
     (block $out
-      (set_local $x
-        (i32.const 1)
-      )
       (br_if $out
         (i32.const 2)
+      )
+      (set_local $x
+        (i32.const 1)
       )
     )
   )
-  (func $ignore-last2 (type $0)
+  (func $last2 (type $0)
     (local $x i32)
     (block $out
-      (set_local $x
-        (i32.const 1)
-      )
       (nop)
       (nop)
       (br_if $out
         (i32.const 2)
+      )
+      (set_local $x
+        (i32.const 1)
+      )
+    )
+  )
+  (func $last-badtype (type $1) (result i32)
+    (local $x i32)
+    (block $out i32
+      (set_local $x
+        (i32.const 1)
+      )
+      (br_if $out
+        (i32.const 2)
+        (i32.const 3)
+      )
+    )
+  )
+  (func $last-badtype2 (type $1) (result i32)
+    (local $x i32)
+    (block $out i32
+      (set_local $x
+        (i32.const 1)
+      )
+      (br_if $out
+        (i32.const 2)
+        (br $out
+          (i32.const 3)
+        )
       )
     )
   )
@@ -405,6 +431,51 @@
     )
     (drop
       (get_local $x)
+    )
+  )
+  (func $into-if (type $0)
+    (local $x i32)
+    (local $y i32)
+    (local $z i32)
+    (block $out
+      (nop)
+      (if
+        (i32.const 2)
+        (block
+          (set_local $x
+            (i32.const 1)
+          )
+          (drop
+            (get_local $x)
+          )
+        )
+      )
+      (nop)
+      (if
+        (i32.const 4)
+        (block
+          (set_local $y
+            (i32.const 3)
+          )
+          (drop
+            (get_local $y)
+          )
+        )
+        (nop)
+      )
+      (nop)
+      (if
+        (i32.const 6)
+        (nop)
+        (block
+          (set_local $z
+            (i32.const 5)
+          )
+          (drop
+            (get_local $z)
+          )
+        )
+      )
     )
   )
 )
