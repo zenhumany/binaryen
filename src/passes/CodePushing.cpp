@@ -21,61 +21,11 @@
 
 #include <wasm.h>
 #include <pass.h>
-#include <ast_utils.h>
 #include <wasm-builder.h>
+#include <ast_utils.h>
+#include <ast/count.h>
 
 namespace wasm {
-
-//
-// Analyzers some useful local properties: # of sets and gets, and SFA.
-//
-// Single First Assignment (SFA) form: the local has a single set_local, is
-// not a parameter, and has no get_locals before the set_local in postorder.
-// This is a much weaker property than SSA, obviously, but together with
-// our implicit dominance properties in the structured AST is quite useful.
-//
-struct LocalAnalyzer : public PostWalker<LocalAnalyzer, Visitor<LocalAnalyzer>> {
-  std::vector<bool> sfa;
-  std::vector<Index> numSets;
-  std::vector<Index> numGets;
-
-  void analyze(Function* func) {
-    auto num = func->getNumLocals();
-    numSets.resize(num);
-    std::fill(numSets.begin(), numSets.end(), 0);
-    numGets.resize(num);
-    std::fill(numGets.begin(), numGets.end(), 0);
-    sfa.resize(num);
-    std::fill(sfa.begin(), sfa.begin() + func->getNumParams(), false);
-    std::fill(sfa.begin() + func->getNumParams(), sfa.end(), true);
-    walk(func->body);
-    for (Index i = 0; i < num; i++) {
-      if (numSets[i] == 0) sfa[i] = false;
-    }
-  }
-
-  bool isSFA(Index i) {
-    return sfa[i];
-  }
-
-  Index getNumGets(Index i) {
-    return numGets[i];
-  }
-
-  void visitGetLocal(GetLocal *curr) {
-    if (numSets[curr->index] == 0) {
-      sfa[curr->index] = false;
-    }
-    numGets[curr->index]++;
-  }
-
-  void visitSetLocal(SetLocal *curr) {
-    numSets[curr->index]++;
-    if (numSets[curr->index] > 1) {
-      sfa[curr->index] = false;
-    }
-  }
-};
 
 // Implement core optimization logic in a struct, used and then discarded entirely
 // for each block
@@ -83,9 +33,10 @@ class Pusher {
   ExpressionList& list;
   LocalAnalyzer& analyzer;
   std::vector<Index>& numGetsSoFar;
+  Module* module;
 
 public:
-  Pusher(Block* block, LocalAnalyzer& analyzer, std::vector<Index>& numGetsSoFar) : list(block->list), analyzer(analyzer), numGetsSoFar(numGetsSoFar) {
+  Pusher(Block* block, LocalAnalyzer& analyzer, std::vector<Index>& numGetsSoFar, Module* module) : list(block->list), analyzer(analyzer), numGetsSoFar(numGetsSoFar), module(module) {
     // Find an optimization segment: from the first pushable thing, to the first
     // point past which we want to push. We then push in that range before
     // continuing forward.
@@ -139,12 +90,20 @@ private:
     // of earlier ones. Once we know all we can push, we push it all
     // in one pass, keeping the order of the pushables intact.
     assert(firstPushable != Index(-1) && pushPoint != Index(-1) && firstPushable < pushPoint);
+    auto* pushPointExpr = list[pushPoint];
     EffectAnalyzer cumulativeEffects; // everything that matters if you want
                                       // to be pushed past the pushPoint
-    cumulativeEffects.analyze(list[pushPoint]);
+    cumulativeEffects.analyze(pushPointExpr);
     cumulativeEffects.branches = false; // it is ok to ignore the branching here,
                                         // that is the crucial point of this opt
     std::vector<SetLocal*> toPush;
+    // if handling
+    auto* iff = pushPointExpr->dynCast<If>();
+    std::unique_ptr<EffectAnalyzer> ifCondition;
+    std::unique_ptr<GetLocalCounter> ifTrueCounter, ifFalseCounter;
+    std::vector<SetLocal*> toPushToIfTrue, toPushToIfFalse;
+    Builder builder(*module);
+    // loop
     Index i = pushPoint - 1;
     while (1) {
       auto* pushable = isPushable(list[i]);
@@ -155,8 +114,38 @@ private:
         }
         auto& effects = pushableEffects[pushable];
         if (cumulativeEffects.invalidates(effects)) {
-          // we can't push this, so further pushables must pass it
-          cumulativeEffects.mergeIn(effects);
+          // we can't push this
+          bool stays = true;
+          if (iff) {
+            // we can't push *past* the if, but maybe we can push
+            // into it
+            if (!ifCondition) {
+              ifCondition = make_unique<EffectAnalyzer>(iff->condition);
+              if (!ifCondition->invalidates(effects)) {
+                // we can push past the condition
+                Index index = pushable->index;
+                ifTrueCounter = make_unique<GetLocalCounter>(getFunction(), iff->ifTrue);
+                if (ifTrueCounter->numGets[index] == analyzer.getNumGets(index)) {
+                  // all uses are in the ifTrue, good
+                  toPushToIfTrue.push_back(pushable);
+                  list[i] = builder.makeNop();
+                  stays = false;
+                } else if (iff->ifFalse) {
+                  ifFalseCounter = make_unique<GetLocalCounter>(getFunction(), iff->ifFalse);
+                  if (ifFalseCounter->numGets[index] == analyzer.getNumGets(index)) {
+                    // all uses are in the ifFalse, good
+                    toPushToIfFalse.push_back(pushable);
+                    list[i] = builder.makeNop();
+                    stays = false;
+                  }
+                }
+              }
+            }
+          }
+          if (stays) {
+            // this stays in place, further pushables must pass it
+            cumulativeEffects.mergeIn(effects);
+          }
         } else {
           // we can push this, great!
           toPush.push_back(pushable);
@@ -172,12 +161,13 @@ private:
       assert(i > 0);
       i--;
     }
-    if (toPush.size() == 0) {
+    Index total = toPush.size();
+    if (total == 0 && toPushToIfTrue.empty() && toPushToIfFalse.empty()) {
       // nothing to do, can only continue after the push point
       return pushPoint + 1;
     }
     // we have work to do!
-    Index total = toPush.size();
+    // first, skip past the pushed elements
     Index last = total - 1;
     Index skip = 0;
     for (Index i = firstPushable; i <= pushPoint; i++) {
@@ -195,6 +185,26 @@ private:
     // write out the skipped elements
     for (Index i = 0; i < total; i++) {
       list[pushPoint - i] = toPush[i];
+    }
+    // handle elements pushed into ifs
+    if (iff) {
+      auto pushInto = [](std::vector<SetLocal*>& toPush, Expression*& arm) {
+        auto* block = builder.makeBlock();
+        Index total = toPush.size();
+        block->list.resize(total + 1);
+        for (Index i = 0; i < total; i++) {
+          block->list[total - 1 - i] = toPush[i];
+        }
+        block->list[total] = arm;
+        arm = block;
+      }
+      if (!toPushToIfTrue.empty()) {
+        pushInfo(toPushIntoIfTrue, iff->ifTrue);
+      }
+      if (!toPushToIfFalse.empty()) {
+        pushInfo(toPushIntoIfFalse, iff->ifFalse);
+      }
+      // TODO: recurse into arms, or do a whole other pass?
     }
     // proceed right after the push point, we may push the pushed elements again
     return pushPoint - total + 1;
@@ -241,7 +251,7 @@ struct CodePushing : public WalkerPass<PostWalker<CodePushing, Visitor<CodePushi
     // ordering invalidation issue, since if this isn't a loop, it's fine (we're not
     // used outside), and if it is, we hit the assign before any use (as we can't
     // push it past a use).
-    Pusher pusher(curr, analyzer, numGetsSoFar);
+    Pusher pusher(curr, analyzer, numGetsSoFar, getModule());
   }
 };
 
