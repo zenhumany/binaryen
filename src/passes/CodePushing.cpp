@@ -62,6 +62,8 @@ public:
     }
   }
 
+  bool pushedIntoIf = false;
+
 private:
   SetLocal* isPushable(Expression* curr) {
     auto* set = curr->dynCast<SetLocal>();
@@ -71,7 +73,6 @@ private:
   }
 
   // Push past conditional control flow.
-  // TODO: push into ifs as well
   bool isPushPoint(Expression* curr) {
     // look through drops
     if (auto* drop = curr->dynCast<Drop>()) {
@@ -201,11 +202,12 @@ private:
       };
       if (!toPushToIfTrue.empty()) {
         pushInto(toPushToIfTrue, iff->ifTrue);
+        pushedIntoIf = true;
       }
       if (!toPushToIfFalse.empty()) {
         pushInto(toPushToIfFalse, iff->ifFalse);
+        pushedIntoIf = true;
       }
-      // TODO: recurse into arms, or do a whole other pass?
     }
     // proceed right after the push point, we may push the pushed elements again
     return pushPoint - total + 1;
@@ -225,14 +227,20 @@ struct CodePushing : public WalkerPass<PostWalker<CodePushing, Visitor<CodePushi
   // gets seen so far in the main traversal
   std::vector<Index> numGetsSoFar;
 
+  bool anotherCycle;
+
   void doWalkFunction(Function* func) {
     // pre-scan to find which vars are sfa, and also count their gets&sets
     analyzer.analyze(func);
-    // prepare to walk
-    numGetsSoFar.resize(func->getNumLocals());
-    std::fill(numGetsSoFar.begin(), numGetsSoFar.end(), 0);
-    // walk and optimize
-    walk(func->body);
+    while (1) {
+      // prepare to walk
+      anotherCycle = false;
+      numGetsSoFar.resize(func->getNumLocals());
+      std::fill(numGetsSoFar.begin(), numGetsSoFar.end(), 0);
+      // walk and optimize
+      walk(func->body);
+      if (!anotherCycle) break;
+    }
   }
 
   void visitGetLocal(GetLocal *curr) {
@@ -253,6 +261,8 @@ struct CodePushing : public WalkerPass<PostWalker<CodePushing, Visitor<CodePushi
     // used outside), and if it is, we hit the assign before any use (as we can't
     // push it past a use).
     Pusher pusher(curr, analyzer, numGetsSoFar, getModule(), getFunction());
+    // if we pushed into an if, we need another cycle to continue pushing inside it
+    if (pusher.pushedIntoIf) anotherCycle = true;
   }
 };
 
