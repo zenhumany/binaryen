@@ -415,7 +415,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals, 
 
   void doWalkFunction(Function* func) {
     // scan get_locals
-    GetLocalCounter counter(func);
+    counter.analyze(func);
     // multiple passes may be required per function, consider this:
     //    x = load
     //    y = store

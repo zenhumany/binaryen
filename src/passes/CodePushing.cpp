@@ -34,9 +34,10 @@ class Pusher {
   LocalAnalyzer& analyzer;
   std::vector<Index>& numGetsSoFar;
   Module* module;
+  Function* function;
 
 public:
-  Pusher(Block* block, LocalAnalyzer& analyzer, std::vector<Index>& numGetsSoFar, Module* module) : list(block->list), analyzer(analyzer), numGetsSoFar(numGetsSoFar), module(module) {
+  Pusher(Block* block, LocalAnalyzer& analyzer, std::vector<Index>& numGetsSoFar, Module* module, Function* function) : list(block->list), analyzer(analyzer), numGetsSoFar(numGetsSoFar), module(module), function(function) {
     // Find an optimization segment: from the first pushable thing, to the first
     // point past which we want to push. We then push in that range before
     // continuing forward.
@@ -124,14 +125,14 @@ private:
               if (!ifCondition->invalidates(effects)) {
                 // we can push past the condition
                 Index index = pushable->index;
-                ifTrueCounter = make_unique<GetLocalCounter>(getFunction(), iff->ifTrue);
+                ifTrueCounter = make_unique<GetLocalCounter>(function, iff->ifTrue);
                 if (ifTrueCounter->numGets[index] == analyzer.getNumGets(index)) {
                   // all uses are in the ifTrue, good
                   toPushToIfTrue.push_back(pushable);
                   list[i] = builder.makeNop();
                   stays = false;
                 } else if (iff->ifFalse) {
-                  ifFalseCounter = make_unique<GetLocalCounter>(getFunction(), iff->ifFalse);
+                  ifFalseCounter = make_unique<GetLocalCounter>(function, iff->ifFalse);
                   if (ifFalseCounter->numGets[index] == analyzer.getNumGets(index)) {
                     // all uses are in the ifFalse, good
                     toPushToIfFalse.push_back(pushable);
@@ -188,7 +189,7 @@ private:
     }
     // handle elements pushed into ifs
     if (iff) {
-      auto pushInto = [](std::vector<SetLocal*>& toPush, Expression*& arm) {
+      auto pushInto = [&builder](std::vector<SetLocal*>& toPush, Expression*& arm) {
         auto* block = builder.makeBlock();
         Index total = toPush.size();
         block->list.resize(total + 1);
@@ -197,12 +198,12 @@ private:
         }
         block->list[total] = arm;
         arm = block;
-      }
+      };
       if (!toPushToIfTrue.empty()) {
-        pushInfo(toPushIntoIfTrue, iff->ifTrue);
+        pushInto(toPushToIfTrue, iff->ifTrue);
       }
       if (!toPushToIfFalse.empty()) {
-        pushInfo(toPushIntoIfFalse, iff->ifFalse);
+        pushInto(toPushToIfFalse, iff->ifFalse);
       }
       // TODO: recurse into arms, or do a whole other pass?
     }
@@ -251,7 +252,7 @@ struct CodePushing : public WalkerPass<PostWalker<CodePushing, Visitor<CodePushi
     // ordering invalidation issue, since if this isn't a loop, it's fine (we're not
     // used outside), and if it is, we hit the assign before any use (as we can't
     // push it past a use).
-    Pusher pusher(curr, analyzer, numGetsSoFar, getModule());
+    Pusher pusher(curr, analyzer, numGetsSoFar, getModule(), getFunction());
   }
 };
 
