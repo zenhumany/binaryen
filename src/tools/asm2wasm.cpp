@@ -89,6 +89,10 @@ int main(int argc, const char *argv[]) {
       .add("--symbolmap", "-s", "Emit a symbol map (indexes => names)",
            Options::Arguments::One,
            [&](Options *o, const std::string &argument) { symbolMap = argument; })
+      .add("--mem-from-wasm", "-f", "Import a memory initialization file from another wasm module into the output module (useful when debugging)", Options::Arguments::One,
+           [](Options *o, const std::string &argument) {
+             o->extra["mem from wasm"] = argument;
+           })
       .add_positional("INFILE", Options::Arguments::One,
                       [](Options *o, const std::string &argument) {
                         o->extra["infile"] = argument;
@@ -159,6 +163,17 @@ int main(int argc, const char *argv[]) {
     } else {
       wasm.table.max = Table::kMaxSize;
     }
+  }
+
+  // Import memory from another wasm, if requested
+  Module other; // if we need it, we need it to live til the end,
+                // as we don't bother to copy the init exprs
+  const auto &memFromWasm = options.extra.find("mem from wasm");
+  if (memFromWasm != options.extra.end()) {
+    auto filename = memFromWasm->second.c_str();
+    ModuleReader reader;
+    reader.read(filename, other);
+    wasm.memory = other.memory;
   }
 
   if (options.debug) std::cerr << "printing..." << std::endl;
