@@ -54,6 +54,7 @@ FOREACH(SUFFIX "_DEBUG" "_RELEASE" "_RELWITHDEBINFO" "_MINSIZEREL" "")
 ENDFOREACH()
 
 SET(all_passes passes)
+SET(CMAKE_CXX_STANDARD 11)
 
 IF(MSVC)
   IF(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "19.0") # VS2013 and older explicitly need /arch:sse2 set, VS2015 no longer has that option, but always enabled. 
