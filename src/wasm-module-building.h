@@ -47,6 +47,8 @@ static std::mutex debug;
 //        number of functions. Then call addFunction as you have
 //        new functions to add (this also adds it to the module). Finally,
 //        call finish() when all functions have been added.
+//        optionally, call optimizeGlobally() after finish(), to
+//        perform global optimizations.
 //
 // This avoids locking by using atomics. We allocate an array of nullptrs
 // that represent all the functions, and as we add a function, we place it
@@ -165,8 +167,13 @@ public:
     assert(nextFunction == numFunctions);
     wakeAllWorkers();
     waitUntilAllFinished();
-    optimizeGlobally();
     // TODO: clear side thread allocators from module allocator, as these threads were transient
+  }
+
+  void optimizeGlobally() {
+    PassRunner passRunner(wasm, passOptions);
+    passRunner.addDefaultGlobalOptimizationPasses();
+    passRunner.run();
   }
 
 private:
@@ -214,12 +221,6 @@ private:
     assert(nextFunction < numFunctions); // TODO: if we are given more than we expected, use a slower work queue?
     list[nextFunction++].store(func);
     availableFuncs++;
-  }
-
-  void optimizeGlobally() {
-    PassRunner passRunner(wasm, passOptions);
-    passRunner.addDefaultGlobalOptimizationPasses();
-    passRunner.run();
   }
 
   // worker code
