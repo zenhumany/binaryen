@@ -26,6 +26,7 @@
 #include <pass.h>
 #include <wasm-builder.h>
 #include <parsing.h>
+#include <ast_utils.h>
 
 namespace wasm {
 
@@ -91,8 +92,6 @@ private:
 
 // Core inlining logic. Modifies the outside function (adding locals as
 // needed), and returns the inlined code.
-// Since we only inline once, and do not need the function afterwards, we
-// can just reuse all the nodes and even avoid copying.
 static Expression* doInlining(Module* module, Function* into, Action& action) {
   Builder builder(*module);
   auto* block = action.block;
@@ -124,9 +123,9 @@ static Expression* doInlining(Module* module, Function* into, Action& action) {
     block->list.push_back(builder.makeSetLocal(updater.localMapping[i], action.call->operands[i]));
   }
   // update the inlined contents
-  updater.walk(action.contents->body);
-  block->list.push_back(action.contents->body);
-  action.contents->body = builder.makeUnreachable(); // not strictly needed, since it's going away
+  auto* contents = ExpressionManipulator::copy(action.contents->body, *module);
+  updater.walk(contents);
+  block->list.push_back(contents);
   return block;
 }
 
@@ -137,32 +136,12 @@ struct Inlining : public Pass {
   }
 
   bool iteration(PassRunner* runner, Module* module) {
-    // Count uses
-    std::map<Name, Index> uses;
-    // fill in uses, as we operate on it in parallel (each function to its own entry)
-    for (auto& func : module->functions) {
-      uses[func->name] = 0;
-    }
-    {
-      PassRunner runner(module);
-      runner.add<FunctionUseCounter>(&uses);
-      runner.run();
-    }
-    for (auto& ex : module->exports) {
-      if (ex->kind == ExternalKind::Function) {
-        uses[ex->value] = 2; // too many, so we ignore it
-      }
-    }
-    for (auto& segment : module->table.segments) {
-      for (auto name : segment.data) {
-        uses[name]++;
-      }
-    }
     // decide which to inline
     InliningState state;
-    for (auto iter : uses) {
-      if (iter.second == 1) {
-        state.canInline.insert(iter.first);
+    for (auto& func : module->functions) {
+      if (func->name == I32S_REM || func->name == I32S_DIV ||
+          func->name == I32U_REM || func->name == I32U_DIV) {
+        state.canInline.insert(func->name);
       }
     }
     // fill in actionsForFunction, as we operate on it in parallel (each function to its own entry)

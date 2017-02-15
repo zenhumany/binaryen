@@ -132,6 +132,7 @@ void PassRunner::addDefaultFunctionOptimizationPasses() {
 }
 
 void PassRunner::addDefaultGlobalOptimizationPasses() {
+  add("inlining");
   add("duplicate-function-elimination");
   add("remove-unused-module-elements");
   add("memory-packing");
