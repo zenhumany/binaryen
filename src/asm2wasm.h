@@ -134,6 +134,16 @@ Index indexOr(Index x, Index y) {
 struct AstStackHelper {
   static std::vector<Ref> astStack;
   AstStackHelper(Ref curr) {
+#ifndef NDEBUG
+    static const size_t AST_STACK_WARNING_UNIT = 1000;
+    if (astStack.size() >= AST_STACK_WARNING_UNIT) {
+      static size_t lastWarned = 0;
+      if (astStack.size() >= lastWarned + AST_STACK_WARNING_UNIT) {
+        lastWarned = astStack.size();
+        std::cerr << "warning: massively nested AST stack, " << lastWarned << " deep\n";
+      }
+    }
+#endif
     astStack.push_back(curr);
   }
   ~AstStackHelper() {
