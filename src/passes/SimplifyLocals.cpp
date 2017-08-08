@@ -90,7 +90,7 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals>>
   };
 
   // a list of sinkables in a linear execution trace
-  typedef std::map<Index, SinkableInfo> Sinkables;
+  typedef std::unordered_map<Index, SinkableInfo> Sinkables;
 
   // locals in current linear execution trace, which we try to sink
   Sinkables sinkables;
@@ -106,11 +106,11 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals>>
   // a list of all sinkable traces that exit a block. the last
   // is falling off the end, others are branches. this is used for
   // block returns
-  std::map<Name, std::vector<BlockBreak>> blockBreaks;
+  std::unordered_map<Name, std::vector<BlockBreak>> blockBreaks;
 
   // blocks that we can't produce a block return value for them.
   // (switch target, or some other reason)
-  std::set<Name> unoptimizableBlocks;
+  std::unordered_set<Name> unoptimizableBlocks;
 
   // A stack of sinkables from the current traversal state. When
   // execution reaches an if-else, it splits, and can then
