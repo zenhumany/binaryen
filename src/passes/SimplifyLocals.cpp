@@ -321,9 +321,13 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals>>
         }
       }
       if (inAll) {
-        sharedIndex = index;
-        found = true;
-        break;
+        if (!found) {
+          sharedIndex = index;
+          found = true;
+        } else {
+          // we'll use the smallest index, for determinism
+          sharedIndex = std::min(sharedIndex, index);
+        }
       }
     }
     if (!found) return;
@@ -381,9 +385,13 @@ struct SimplifyLocals : public WalkerPass<LinearExecutionWalker<SimplifyLocals>>
     for (auto& sinkable : ifTrue) {
       Index index = sinkable.first;
       if (ifFalse.count(index) > 0) {
-        sharedIndex = index;
-        found = true;
-        break;
+        if (!found) {
+          sharedIndex = index;
+          found = true;
+        } else {
+          // we'll use the smallest index, for determinism
+          sharedIndex = std::min(sharedIndex, index);
+        }
       }
     }
     if (!found) return;
