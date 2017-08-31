@@ -28,12 +28,16 @@
 //    byte).
 //  * All things considered, similar function should be close together,
 //    and after the first two operations we also look at how similar the
-//    contents (not just sizes) are. TODO
+//    contents (not just sizes) are.
 //
 
 
 #include <atomic>
 #include <memory>
+
+#ifdef HAS_ZLIB
+#include <zlib.h>
+#endif
 
 #include <wasm.h>
 #include <pass.h>
@@ -86,6 +90,8 @@ struct ReorderFunctions : public Pass {
     }
     // refine by size
     refineBySize(module, functionInfoMap);
+    // refine by similarity
+    refineBySimilarity(module, functionInfoMap);
   }
 
   void sortByUses(Module* module) {
@@ -150,6 +156,80 @@ struct ReorderFunctions : public Pass {
       });
       start = end;
     }
+  }
+
+  void refineBySimilarity(Module* module, FunctionInfoMap& functionInfoMap) {
+    // Sort in chunks of a fixed size. This is useful because
+    //  * We want to keep the number of bytes used by call instructions
+    //    fixed, that is, if we sorted a function so it has an index
+    //    in 0..127, then the LEB in the calls to it take one byte, and
+    //    don't want that to change.
+    //  * We do an O(n^2) operation we want to keep n (chunk size) low.
+    //  * There is a quick diminishing return here, in that adjacent
+    //    functions should be similar, and farther out it matters less,
+    //    and we've already sorted by size, so almost identical ones
+    //    tend to be close anyhow.
+    //
+    // The sort itself is greedy. In theory we could do better with a
+    // clustering type algorithm.
+    auto& functions = module->functions;
+    const size_t chunkSize = 1 << BitsPerLEBByte;
+    size_t start = 0;
+    Name last; // we find the best match for the last one. this crosses
+               // chunks, as it should
+    while (start < functions.size()) {
+      size_t end = std::min(start + chunkSize, functions.size());
+      for (size_t i = start; i < end; i++) {
+        if (!last.is()) {
+          // this is the very first iteration. just leave the first (and
+          // largest) function in place
+        } else {
+          // greedy: find the most similar function to the last
+          size_t bestIndex = i;
+          auto bestDifference = getDifference(last, functions[i]->name, functionInfoMap);
+          for (size_t j = i + 1; j < end; j++) {
+            auto currDifference = getDifference(last, functions[j]->name, functionInfoMap);
+            if (currDifference < bestDifference) {
+              bestDifference = currDifference;
+              bestIndex = j;
+            }
+          }
+          std::swap(functions[i], functions[bestIndex]);
+        }
+        last = functions[i]->name;
+      }
+    }
+  }
+
+  // computes how different two sets of bytes are. the lower, the more similar
+  int getDifference(Name a, Name b, FunctionInfoMap& functionInfoMap) {
+#ifdef HAS_ZLIB
+    auto getCompressedSize = [](uint8_t* data, size_t size) {
+      unsigned long maxCompressedSize = compressBound(size);
+      auto buffer = malloc(maxCompressedSize);
+      unsigned long compressedSize;
+      compress((unsigned char*)buffer, &compressedSize, data, size);
+      free(buffer);
+      return compressedSize;
+    };
+    auto aSize = functionInfoMap[a].size;
+    auto bSize = functionInfoMap[b].size;
+    auto aData = functionInfoMap[a].data;
+    auto bData = functionInfoMap[b].data;
+    auto aCompressedSize = getCompressedSize(aData, aSize);
+    auto bCompressedSize = getCompressedSize(bData, bSize);
+    auto combinedSize = aSize + bSize;
+    auto combinedData = (uint8_t*)malloc(combinedSize);
+    memcpy(combinedData, aData, aSize);
+    memcpy(combinedData + aSize, bData, bSize);
+    auto combinedCompressedSize = getCompressedSize(combinedData, combinedSize);
+    // two byte streams are more similar when their compressed size is lower than
+    // the sum of their compressed sizes, because compression took advantage of
+    // similarity between them
+    auto sum = aCompressedSize + bCompressedSize;
+    return (100 * (combinedCompressedSize - sum)) / sum;
+#endif
+    abort(); // TODO: levinshtein distance or a fast approximation?
   }
 };
 
