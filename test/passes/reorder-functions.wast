@@ -58,4 +58,48 @@
     (call $c)
   )
 )
+(module ;; with 4
+  (memory 256 256)
+  (func $a
+    (call $a)
+    (nop)
+  )
+  (func $b
+    (call $b)
+    (unreachable)
+  )
+  (func $c
+    (call $c)
+    (unreachable)
+    (unreachable)
+  )
+  (func $d
+    (call $d)
+    (unreachable)
+    (unreachable)
+    (call $d)
+  )
+)
+(module ;; with 4
+  (memory 256 256)
+  (func $d
+    (call $d)
+    (unreachable)
+    (unreachable)
+    (call $d)
+  )
+  (func $c
+    (call $c)
+    (unreachable)
+    (unreachable)
+  )
+  (func $b
+    (call $b)
+    (unreachable)
+  )
+  (func $a
+    (call $a)
+    (nop)
+  )
+)
 
