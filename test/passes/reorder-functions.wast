@@ -1,33 +1,61 @@
-(module
+(module ;; sort by uses
   (memory 256 256)
-  (type $0 (func))
-  (func $a (type $0)
+  (func $a
     (call $a)
   )
-  (func $b (type $0)
+  (func $b
     (call $b)
     (call $b)
   )
-  (func $c (type $0)
+  (func $c
     (call $c)
     (call $c)
     (call $c)
   )
 )
-(module
+(module ;; sort by uses take 2
   (memory 256 256)
-  (type $0 (func))
-  (func $a (type $0)
+  (func $a
     (call $a)
   )
-  (func $c (type $0)
+  (func $c
     (call $c)
     (call $c)
     (call $c)
   )
-  (func $b (type $0)
+  (func $b
     (call $b)
     (call $b)
+  )
+)
+(module ;; some identical uses, so similarity matters
+  (memory 256 256)
+  (func $a
+    (call $a)
+  )
+  (func $b
+    (call $b)
+    (nop)
+  )
+  (func $c
+    (call $c)
+    (nop)
+    (call $c)
+  )
+)
+(module ;; some identical uses, so similarity matters take 2
+  (memory 256 256)
+  (func $a
+    (call $a)
+    (nop)
+  )
+  (func $b
+    (call $b)
+  )
+  (func $c
+    (call $c)
+    (nop)
+    (call $c)
   )
 )
 
