@@ -17,18 +17,15 @@
 //
 // Sorts functions to reduce the size and improve compressibility of
 // the output binary. This considers several factors, in decreasing
-// importance.
+// importance:
+//
 //  * Functions with many uses should get lower indexes, so each call
 //    to them is smaller (i.e. the LEB with the index is small).
-//  * All things considered, larger functions should be first. This is
-//    helpful for JIT times as they may take longer to compile, and also
-//    similar functions tend to of similar size, and they may compress
-//    well if they are close together (for example, a C++ template might
-//    generate two almost-identical functions that differ in just one
-//    byte).
-//  * All things considered, similar function should be close together,
-//    and after the first two operations we also look at how similar the
-//    contents (not just sizes) are.
+//  * Similar functions should be close together, since they may compress
+//    well that way (otherwise, similar things may be out of range
+//    for the compression sliding window etc.).
+//  * Large functions should be earlier, as they may take longer to
+//    compile.
 //
 
 
@@ -42,7 +39,7 @@
 
 namespace wasm {
 
-// Very simple string difference metric. Very loosely inspired by
+// Very simple string difference "metric". Very loosely inspired by
 //   http://dimacs.rutgers.edu/~graham/pubs/papers/editmovestalg.pdf
 //   The String Edit Distance Matching Problem with Moves
 //   GRAHAM CORMODE (AT&T Labs–Research) S. MUTHUKRISHNAN (Rutgers University)
@@ -50,65 +47,82 @@ namespace wasm {
 // manner, ignoring their location. This approximates the edit distance
 // with moves, which makes sense for us since "moves" exist in gzip etc.
 // compression.
-static size_t simpleStringDifference(uint8_t* aData, size_t aSize, uint8_t* bData, size_t bSize) {
-  typedef std::unordered_map<HashResult, size_t> HashCounts;
 
-  auto hashSubstrings = [](uint8_t* data, size_t size, HashCounts& hashCounts) {
-    // the largest substring to consider
-    const size_t MAX_SUB_SIZE = 1024;
+struct StringRef {
+  uint8_t* data;
+  size_t size;
+  StringRef(uint8_t* data, size_t size) : data(data), size(size) {}
+};
 
-    auto hashString = [](uint8_t* data, size_t size) {
-      HashResult ret = 0;
-      while (size > 0) {
-        ret = rehash(ret, *data);
-        data++;
-        size--;
-      }
-      return ret;
-    };
+class StringSignature {
+  // each hash value => how many times it was seen
+  std::unordered_map<HashResult, size_t> hashCounts;
 
+  // the largest substring to consider. there are diminishing gains
+  // fairly quickly.
+  static const size_t MAX_SUB_SIZE = 32;
+
+  // the maximum number of hashes to consider. this avoids very long
+  // computation time, which often isn't worth it.
+  static const size_t MAX_HASHES = 4096;
+
+public:
+  StringSignature(StringRef str) {
     // start with a hash of the full string
-    hashCounts[hashString(data, size)]++;
+    hashCounts[hashString(str.data, str.size)]++;
     // add hashes of substrings
-    for (size_t i = 0; i < size; i++) {
+    for (size_t i = 0; i < str.size; i++) {
       // starting from this location, add hashes of substrings of various sizes
       size_t subSize = 1;
       HashResult hash = 0;
       do {
         // don't rehash already hashed portions, hash just the later half
-        hash = rehash(hash, hashString(data + i + (subSize / 2), subSize / 2));
-        hashCounts[hash]++;
+        hash = rehash(hash, hashString(str.data + i + (subSize / 2), subSize / 2));
+        // increment this hash, but only if we haven't seen too many unique ones
+        if (hashCounts.size() < MAX_HASHES || hashCounts.count(hash) > 0) {
+          hashCounts[hash]++;
+        }
         subSize *= 2;
-      } while (i + subSize <= size && subSize < MAX_SUB_SIZE);
+      } while (i + subSize <= str.size && subSize < MAX_SUB_SIZE);
     }
-  };
+  }
 
-  HashCounts a, b;
-  hashSubstrings(aData, aSize, a);
-  hashSubstrings(bData, bSize, b);
-  size_t diff = 0;
-  // add ones only in a, and diffs of ones in both
-  for (auto& pair : a) {
-    auto hash = pair.first;
-    auto count = pair.second;
-    auto iter = b.find(hash);
-    if (iter == b.end()) {
-      diff += count;
-    } else {
-      diff += std::abs(count - iter->second);
+  size_t difference(StringSignature& other) {
+    size_t diff = 0;
+    // add ones only in us, and diffs of ones in both
+    for (auto& pair : hashCounts) {
+      auto hash = pair.first;
+      auto count = pair.second;
+      auto iter = other.hashCounts.find(hash);
+      if (iter == other.hashCounts.end()) {
+        diff += count;
+      } else {
+        diff += std::abs(count - iter->second);
+      }
     }
-  }
-  // add ones only in b
-  for (auto& pair : b) {
-    auto hash = pair.first;
-    auto count = pair.second;
-    auto iter = a.find(hash);
-    if (iter == a.end()) {
-      diff += count;
+    // add ones only in the other
+    for (auto& pair : other.hashCounts) {
+      auto hash = pair.first;
+      auto count = pair.second;
+      auto iter = hashCounts.find(hash);
+      if (iter == hashCounts.end()) {
+        diff += count;
+      }
     }
+    return diff;
   }
-  return diff;
-}
+
+private:
+  HashResult hashString(uint8_t* data, size_t size) {
+    HashResult ret = 0;
+    while (size > 0) {
+      ret = rehash(ret, *data);
+      data++;
+      size--;
+    }
+    return ret;
+  };
+};
 
 typedef std::unordered_map<Name, std::atomic<Index>> FunctionUseMap;
 
@@ -153,9 +167,6 @@ struct ReorderFunctions : public Pass {
         writer.tableOfContents.functions[i].size
       );
     }
-    // refine by size
-    refineBySize(module, functionInfoMap);
-    // refine by similarity
     refineBySimilarity(module, functionInfoMap);
   }
 
@@ -196,54 +207,26 @@ struct ReorderFunctions : public Pass {
     });
   }
 
-  void refineBySize(Module* module, FunctionInfoMap& functionInfoMap) {
-    // Sort by function size, without moving past boundaries that would
-    // change the LEB size of the call instructions.
+  void refineBySimilarity(Module* module, FunctionInfoMap& functionInfoMap) {
+    auto& functions = module->functions;
     size_t start = 0,
            bits = 0;
-    while (start < module->functions.size()) {
+    // similarity is to the last element, which may be from a previous chunk
+    std::unordered_map<Name, StringSignature> functionSignatures;
+    Name last;
+    while (start < functions.size()) {
       bits += BitsPerLEBByte;
       size_t end;
       if (bits < std::numeric_limits<size_t>::digits) {
-        end = std::min(start + (1 << bits), module->functions.size());
+        end = std::min(start + (1 << bits), functions.size());
       } else {
-        end = module->functions.size();
+        end = functions.size();
       }
-      std::sort(module->functions.begin() + start, module->functions.begin() + end, [&functionInfoMap](
-        const std::unique_ptr<Function>& a,
-        const std::unique_ptr<Function>& b) -> bool {
-        auto aSize = functionInfoMap[a->name].size,
-             bSize = functionInfoMap[b->name].size;
-        if (aSize == bSize) {
-          return strcmp(a->name.str, b->name.str) > 0;
-        }
-        return aSize > bSize;
+      // calculate the signature of the contents of each function
+      std::for_each(functions.begin() + start, functions.begin() + end, [&](const std::unique_ptr<Function>& func) {
+        functionSignatures.emplace(func->name, StringRef(functionInfoMap[func->name].data, functionInfoMap[func->name].size));
       });
-      start = end;
-    }
-  }
-
-  void refineBySimilarity(Module* module, FunctionInfoMap& functionInfoMap) {
-    // Sort in chunks of a fixed size. This is useful because
-    //  * We want to keep the number of bytes used by call instructions
-    //    fixed, that is, if we sorted a function so it has an index
-    //    in 0..127, then the LEB in the calls to it take one byte, and
-    //    don't want that to change.
-    //  * We do an O(n^2) operation we want to keep n (chunk size) low.
-    //  * There is a quick diminishing return here, in that adjacent
-    //    functions should be similar, and farther out it matters less,
-    //    and we've already sorted by size, so almost identical ones
-    //    tend to be close anyhow.
-    //
-    // The sort itself is greedy. In theory we could do better with a
-    // clustering type algorithm.
-    auto& functions = module->functions;
-    const size_t chunkSize = 1 << BitsPerLEBByte;
-    size_t start = 0;
-    Name last; // we find the best match for the last one. this crosses
-               // chunks, as it should
-    while (start < functions.size()) {
-      size_t end = std::min(start + chunkSize, functions.size());
+      // sort them using the distance metric, plus size as secondary
       for (size_t i = start; i < end; i++) {
         if (!last.is()) {
           // this is the very first iteration. just leave the first (and
@@ -251,10 +234,12 @@ struct ReorderFunctions : public Pass {
         } else {
           // greedy: find the most similar function to the last
           size_t bestIndex = i;
-          auto bestDifference = getDifference(last, functions[i]->name, functionInfoMap);
+          auto bestDifference = functionSignatures.at(last).difference(functionSignatures.at(functions[i]->name));
           for (size_t j = i + 1; j < end; j++) {
-            auto currDifference = getDifference(last, functions[j]->name, functionInfoMap);
-            if (currDifference < bestDifference) {
+            auto currDifference = functionSignatures.at(last).difference(functionSignatures.at(functions[j]->name));
+            if (currDifference < bestDifference ||
+                (currDifference == bestDifference && functionInfoMap[functions[j]->name].size >
+                                                     functionInfoMap[functions[bestIndex]->name].size)) {
               bestDifference = currDifference;
               bestIndex = j;
             }
@@ -265,12 +250,6 @@ struct ReorderFunctions : public Pass {
       }
       start = end;
     }
-  }
-
-  // computes how different two sets of bytes are. the lower, the more similar
-  size_t getDifference(Name a, Name b, FunctionInfoMap& functionInfoMap) {
-    return simpleStringDifference(functionInfoMap[a].data, functionInfoMap[a].size,
-                                  functionInfoMap[b].data, functionInfoMap[b].size);
   }
 };
 
