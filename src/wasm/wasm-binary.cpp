@@ -277,12 +277,14 @@ void WasmBinaryWriter::writeFunctions() {
     assert(size <= std::numeric_limits<uint32_t>::max());
     if (debug) std::cerr << "body size: " << size << ", writing at " << sizePos << ", next starts at " << o.size() << std::endl;
     auto sizeFieldSize = o.writeAt(sizePos, U32LEB(size));
+    auto dataPos = sizePos + sizeFieldSize;
     if (sizeFieldSize != MaxLEB32Bytes) {
       // we can save some room, nice
       assert(sizeFieldSize < MaxLEB32Bytes);
-      std::move(&o[start], &o[start + size], &o[sizePos + sizeFieldSize]);
+      std::move(&o[start], &o[start + size], &o[dataPos]);
       o.resize(o.size() - (MaxLEB32Bytes - sizeFieldSize));
     }
+    tableOfContents.functions.emplace_back(dataPos, size);
   }
   currFunction = nullptr;
   finishSection(start);

@@ -37,7 +37,8 @@ namespace wasm {
 
 enum {
   // the maximum amount of bytes we emit per LEB
-  MaxLEB32Bytes = 5
+  MaxLEB32Bytes = 5,
+  BitsPerLEBByte = 7
 };
 
 template<typename T, typename MiniT>
@@ -142,7 +143,7 @@ class BufferWithRandomAccess : public std::vector<uint8_t> {
   bool debug;
 
 public:
-  BufferWithRandomAccess(bool debug) : debug(debug) {}
+  BufferWithRandomAccess(bool debug = false) : debug(debug) {}
 
   BufferWithRandomAccess& operator<<(int8_t x) {
     if (debug) std::cerr << "writeInt8: " << (int)(uint8_t)x << " (at " << size() << ")" << std::endl;
@@ -653,9 +654,19 @@ class WasmBinaryWriter : public Visitor<WasmBinaryWriter, void> {
 
   void prepare();
 public:
-  WasmBinaryWriter(Module* input, BufferWithRandomAccess& o, bool debug) : wasm(input), o(o), debug(debug) {
+  WasmBinaryWriter(Module* input, BufferWithRandomAccess& o, bool debug = false) : wasm(input), o(o), debug(debug) {
     prepare();
   }
+
+  // locations in the output binary for the various parts of the module
+  struct TableOfContents {
+    struct Entry {
+      size_t offset;
+      size_t size;
+      Entry(size_t offset, size_t size) : offset(offset), size(size) {}
+    };
+    std::vector<Entry> functions;
+  } tableOfContents;
 
   void setNamesSection(bool set) { debugInfo = set; }
   void setSourceMap(std::ostream* set, std::string url) {
