@@ -69,6 +69,11 @@ class StringSignature {
 public:
   StringSignature(StringRef str) {
     // start with a hash of the full string
+std::cout << "  FULL: ";
+for (auto z = str.data; z < str.data + str.size; z++)
+  std::cout << int(*z) << ' ';
+std::cout << "\n";
+std::cout << "  addddd " << (hashString(str.data, str.size)) << "\n";
     hashCounts[hashString(str.data, str.size)]++;
     // add hashes of substrings
     for (size_t i = 0; i < str.size; i++) {
@@ -78,8 +83,13 @@ public:
       do {
         // don't rehash already hashed portions, hash just the later half
         hash = rehash(hash, hashString(str.data + i + (subSize / 2), subSize / 2));
+std::cout << "  scaning ";
+for (auto z = str.data + i + (subSize / 2); z < str.data + i + (subSize / 2) + (subSize / 2); z++)
+  std::cout << int(*z) << ' ';
+std::cout << "\n";
         // increment this hash, but only if we haven't seen too many unique ones
         if (hashCounts.size() < MAX_HASHES || hashCounts.count(hash) > 0) {
+std::cout << "  add " << hash << "\n";
           hashCounts[hash]++;
         }
         subSize *= 2;
@@ -88,6 +98,7 @@ public:
   }
 
   size_t difference(StringSignature& other) {
+std::cout << "comparing with sizes " << hashCounts.size() << " : " << other.hashCounts.size() << "\n";
     size_t diff = 0;
     // add ones only in us, and diffs of ones in both
     for (auto& pair : hashCounts) {
@@ -97,7 +108,7 @@ public:
       if (iter == other.hashCounts.end()) {
         diff += count;
       } else {
-        diff += std::abs(count - iter->second);
+        diff += std::abs(ssize_t(count) - ssize_t(iter->second));
       }
     }
     // add ones only in the other
@@ -109,6 +120,7 @@ public:
         diff += count;
       }
     }
+std::cout << "diff: " << diff << '\n';
     return diff;
   }
 
@@ -196,12 +208,16 @@ struct ReorderFunctions : public Pass {
         uses[curr]++;
       }
     }
-    // Sort by number of uses
-    std::sort(module->functions.begin(), module->functions.end(), [&uses](
+    // Sort by number of uses, break ties by original index
+    std::unordered_map<Name, Index> originalIndex;
+    std::for_each(module->functions.begin(), module->functions.end(), [&originalIndex](const std::unique_ptr<Function>& a) {
+      originalIndex[a->name] = originalIndex.size();
+    });
+    std::sort(module->functions.begin(), module->functions.end(), [&uses, &originalIndex](
       const std::unique_ptr<Function>& a,
       const std::unique_ptr<Function>& b) -> bool {
       if (uses[a->name] == uses[b->name]) {
-        return strcmp(a->name.str, b->name.str) > 0;
+        return originalIndex[a->name] < originalIndex[b->name];
       }
       return uses[a->name] > uses[b->name];
     });
@@ -224,6 +240,7 @@ struct ReorderFunctions : public Pass {
       }
       // calculate the signature of the contents of each function
       std::for_each(functions.begin() + start, functions.begin() + end, [&](const std::unique_ptr<Function>& func) {
+std::cout << "calc sig for " << func->name << "\n";
         functionSignatures.emplace(func->name, StringRef(functionInfoMap[func->name].data, functionInfoMap[func->name].size));
       });
       // sort them using the distance metric, plus size as secondary
@@ -234,8 +251,10 @@ struct ReorderFunctions : public Pass {
         } else {
           // greedy: find the most similar function to the last
           size_t bestIndex = i;
+std::cout << "calc diff " << last << " : " << functions[i]->name << '\n';
           auto bestDifference = functionSignatures.at(last).difference(functionSignatures.at(functions[i]->name));
           for (size_t j = i + 1; j < end; j++) {
+std::cout << "calc diff " << last << " : " << functions[j]->name << '\n';
             auto currDifference = functionSignatures.at(last).difference(functionSignatures.at(functions[j]->name));
             if (currDifference < bestDifference ||
                 (currDifference == bestDifference && functionInfoMap[functions[j]->name].size >

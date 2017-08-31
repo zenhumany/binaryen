@@ -287,7 +287,17 @@ void WasmBinaryWriter::writeFunctions() {
     tableOfContents.functions.emplace_back(dataPos, size);
   }
   currFunction = nullptr;
+  // finish the section. note that this may resize the buffer, if we can shrink the LEB
+  // at the start, and we need to update the table of contents if so
+  auto before = o.size();
   finishSection(start);
+  auto after = o.size();
+  if (after < before) {
+    auto diff = before - after;
+    for (auto& info : tableOfContents.functions) {
+      info.offset -= diff;
+    }
+  }
 }
 
 void WasmBinaryWriter::writeGlobals() {

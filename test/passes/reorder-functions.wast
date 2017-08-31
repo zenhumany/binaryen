@@ -1,5 +1,4 @@
 (module ;; sort by uses
-  (memory 256 256)
   (func $a
     (call $a)
   )
@@ -14,7 +13,6 @@
   )
 )
 (module ;; sort by uses take 2
-  (memory 256 256)
   (func $a
     (call $a)
   )
@@ -29,7 +27,6 @@
   )
 )
 (module ;; some identical uses, so similarity matters
-  (memory 256 256)
   (func $a
     (call $a)
   )
@@ -44,7 +41,6 @@
   )
 )
 (module ;; some identical uses, so similarity matters take 2
-  (memory 256 256)
   (func $a
     (call $a)
     (nop)
@@ -59,7 +55,6 @@
   )
 )
 (module ;; with 4
-  (memory 256 256)
   (func $a
     (call $a)
     (nop)
@@ -81,7 +76,6 @@
   )
 )
 (module ;; with 4
-  (memory 256 256)
   (func $d
     (call $d)
     (unreachable)
@@ -99,6 +93,27 @@
   )
   (func $a
     (call $a)
+    (nop)
+  )
+)
+(module ;; with 4
+  (func $a
+    (call $a)
+    (unreachable)
+    (unreachable)
+    (call $a)
+  )
+  (func $b
+    (call $b)
+    (unreachable)
+    (unreachable)
+  )
+  (func $c
+    (call $c)
+    (unreachable)
+  )
+  (func $d
+    (call $d)
     (nop)
   )
 )
