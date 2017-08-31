@@ -21,8 +21,11 @@
 
 namespace wasm {
 
-inline uint32_t rehash(uint32_t x, uint32_t y) { // see http://www.cse.yorku.ca/~oz/hash.html
-  uint32_t hash = 5381;
+typedef uint32_t HashResult;
+
+// TODO: optimize (for x already being a hash, and y being 8 or 17 bits)
+inline HashResult rehash(HashResult x, HashResult y) { // see http://www.cse.yorku.ca/~oz/hash.html
+  HashResult hash = 5381;
   while (x) {
     hash = ((hash << 5) + hash) ^ (x & 0xff);
     x >>= 8;

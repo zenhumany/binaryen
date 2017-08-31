@@ -30,7 +30,7 @@ namespace wasm {
 struct FunctionHasher : public WalkerPass<PostWalker<FunctionHasher>> {
   bool isFunctionParallel() override { return true; }
 
-  FunctionHasher(std::map<Function*, uint32_t>* output) : output(output) {}
+  FunctionHasher(std::map<Function*, HashResult>* output) : output(output) {}
 
   FunctionHasher* create() override {
     return new FunctionHasher(output);
@@ -49,14 +49,14 @@ struct FunctionHasher : public WalkerPass<PostWalker<FunctionHasher>> {
   }
 
 private:
-  std::map<Function*, uint32_t>* output;
-  uint32_t digest = 0;
+  std::map<Function*, HashResult>* output;
+  HashResult digest = 0;
 
-  void hash(uint32_t hash) {
+  void hash(HashResult hash) {
     digest = rehash(digest, hash);
   }
   void hash64(uint64_t hash) {
-    digest = rehash(rehash(digest, hash >> 32), uint32_t(hash));
+    digest = rehash(rehash(digest, hash >> 32), HashResult(hash));
   };
 };
 
@@ -93,7 +93,7 @@ struct DuplicateFunctionElimination : public Pass {
       hasherRunner.add<FunctionHasher>(&hashes);
       hasherRunner.run();
       // Find hash-equal groups
-      std::map<uint32_t, std::vector<Function*>> hashGroups;
+      std::map<HashResult, std::vector<Function*>> hashGroups;
       for (auto& func : module->functions) {
         hashGroups[hashes[func.get()]].push_back(func.get());
       }
@@ -165,7 +165,7 @@ struct DuplicateFunctionElimination : public Pass {
   }
 
 private:
-  std::map<Function*, uint32_t> hashes;
+  std::map<Function*, HashResult> hashes;
 
   bool equal(Function* left, Function* right) {
     if (left->getNumParams() != right->getNumParams()) return false;

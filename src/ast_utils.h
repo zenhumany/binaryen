@@ -17,6 +17,7 @@
 #ifndef wasm_ast_utils_h
 #define wasm_ast_utils_h
 
+#include "support/hash.h"
 #include "wasm.h"
 #include "wasm-traversal.h"
 #include "wasm-builder.h"
@@ -78,7 +79,7 @@ struct ExpressionAnalyzer {
   }
 
   // hash an expression, ignoring superficial details like specific internal names
-  static uint32_t hash(Expression* curr);
+  static HashResult hash(Expression* curr);
 };
 
 // Re-Finalizes all node types

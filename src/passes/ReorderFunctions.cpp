@@ -35,15 +35,80 @@
 #include <atomic>
 #include <memory>
 
-#ifdef HAS_ZLIB
-#include <zlib.h>
-#endif
-
+#include <support/hash.h>
 #include <wasm.h>
 #include <pass.h>
 #include <wasm-binary.h>
 
 namespace wasm {
+
+// Very simple string difference metric. Very loosely inspired by
+//   http://dimacs.rutgers.edu/~graham/pubs/papers/editmovestalg.pdf
+//   The String Edit Distance Matching Problem with Moves
+//   GRAHAM CORMODE (AT&T Labs–Research) S. MUTHUKRISHNAN (Rutgers University)
+// The idea is to hash substrings of various lengths in a deterministic
+// manner, ignoring their location. This approximates the edit distance
+// with moves, which makes sense for us since "moves" exist in gzip etc.
+// compression.
+static size_t simpleStringDifference(uint8_t* aData, size_t aSize, uint8_t* bData, size_t bSize) {
+  typedef std::unordered_map<HashResult, size_t> HashCounts;
+
+  auto hashSubstrings = [](uint8_t* data, size_t size, HashCounts& hashCounts) {
+    // the largest substring to consider
+    const size_t MAX_SUB_SIZE = 1024;
+
+    auto hashString = [](uint8_t* data, size_t size) {
+      HashResult ret = 0;
+      while (size > 0) {
+        ret = rehash(ret, *data);
+        data++;
+        size--;
+      }
+      return ret;
+    };
+
+    // start with a hash of the full string
+    hashCounts[hashString(data, size)]++;
+    // add hashes of substrings
+    for (size_t i = 0; i < size; i++) {
+      // starting from this location, add hashes of substrings of various sizes
+      size_t subSize = 1;
+      HashResult hash = 0;
+      do {
+        // don't rehash already hashed portions, hash just the later half
+        hash = rehash(hash, hashString(data + i + (subSize / 2), subSize / 2));
+        hashCounts[hash]++;
+        subSize *= 2;
+      } while (i + subSize <= size && subSize < MAX_SUB_SIZE);
+    }
+  };
+
+  HashCounts a, b;
+  hashSubstrings(aData, aSize, a);
+  hashSubstrings(bData, bSize, b);
+  size_t diff = 0;
+  // add ones only in a, and diffs of ones in both
+  for (auto& pair : a) {
+    auto hash = pair.first;
+    auto count = pair.second;
+    auto iter = b.find(hash);
+    if (iter == b.end()) {
+      diff += count;
+    } else {
+      diff += std::abs(count - iter->second);
+    }
+  }
+  // add ones only in b
+  for (auto& pair : b) {
+    auto hash = pair.first;
+    auto count = pair.second;
+    auto iter = a.find(hash);
+    if (iter == a.end()) {
+      diff += count;
+    }
+  }
+  return diff;
+}
 
 typedef std::unordered_map<Name, std::atomic<Index>> FunctionUseMap;
 
@@ -198,38 +263,14 @@ struct ReorderFunctions : public Pass {
         }
         last = functions[i]->name;
       }
+      start = end;
     }
   }
 
   // computes how different two sets of bytes are. the lower, the more similar
-  int getDifference(Name a, Name b, FunctionInfoMap& functionInfoMap) {
-#ifdef HAS_ZLIB
-    auto getCompressedSize = [](uint8_t* data, size_t size) {
-      unsigned long maxCompressedSize = compressBound(size);
-      auto buffer = malloc(maxCompressedSize);
-      unsigned long compressedSize;
-      compress((unsigned char*)buffer, &compressedSize, data, size);
-      free(buffer);
-      return compressedSize;
-    };
-    auto aSize = functionInfoMap[a].size;
-    auto bSize = functionInfoMap[b].size;
-    auto aData = functionInfoMap[a].data;
-    auto bData = functionInfoMap[b].data;
-    auto aCompressedSize = getCompressedSize(aData, aSize);
-    auto bCompressedSize = getCompressedSize(bData, bSize);
-    auto combinedSize = aSize + bSize;
-    auto combinedData = (uint8_t*)malloc(combinedSize);
-    memcpy(combinedData, aData, aSize);
-    memcpy(combinedData + aSize, bData, bSize);
-    auto combinedCompressedSize = getCompressedSize(combinedData, combinedSize);
-    // two byte streams are more similar when their compressed size is lower than
-    // the sum of their compressed sizes, because compression took advantage of
-    // similarity between them
-    auto sum = aCompressedSize + bCompressedSize;
-    return (100 * (combinedCompressedSize - sum)) / sum;
-#endif
-    abort(); // TODO: levinshtein distance or a fast approximation?
+  size_t getDifference(Name a, Name b, FunctionInfoMap& functionInfoMap) {
+    return simpleStringDifference(functionInfoMap[a].data, functionInfoMap[a].size,
+                                  functionInfoMap[b].data, functionInfoMap[b].size);
   }
 };
 

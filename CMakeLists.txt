@@ -9,16 +9,6 @@ ENDIF()
 
 OPTION(BUILD_STATIC_LIB "Build as a static library" OFF)
 
-# Dependencies
-
-# zlib is optionally used for similarity ordering optimizations
-find_package(ZLIB)
-if (ZLIB_FOUND)
-  #include_directories(${ZLIB_INCLUDE_DIRS})
-  #target_link_libraries(MyProg ${ZLIB_LIBRARIES})
-  ADD_DEFINITIONS(-DHAS_ZLIB)
-endif()
-
 # Support functionality.
 
 FUNCTION(ADD_COMPILE_FLAG value)
