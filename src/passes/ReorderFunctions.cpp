@@ -23,9 +23,12 @@
 //    to them is smaller (i.e. the LEB with the index is small).
 //  * Similar functions should be close together, since they may compress
 //    well that way (otherwise, similar things may be out of range
-//    for the compression sliding window etc.).
-//  * Large functions should be earlier, as they may take longer to
-//    compile.
+//    for the compression sliding window etc.). Comparing all the pairs
+//    is O(n^2), so instead we
+//     * Sort by function size. Often similar functions will be close, as
+//       they may be created by something like a C++ template. Also, bigger
+//       functions makes sense to put earlier, as compiling them takes longer.
+//     * Refine that by direct similarity computation.
 //
 
 
@@ -59,8 +62,9 @@ static size_t compressibleDifference(StringRef a, StringRef b) {
   // there isn't much point to look at anything bigger than the sliding window
   // size of typical compression. We just need the last part of a and the first
   // part of b, as they are what will potentially be compressed together.
-  // Actually much less is probably fine too TODO
-  const size_t MAX_SIZE = 32 * 1024;
+  // (gzip's sliding window is 32K, but a much smaller amount is enough for
+  // decent results)
+  const size_t MAX_SIZE = 4 * 1024;
   if (a.size > MAX_SIZE) {
     a.data += a.size - MAX_SIZE;
     a.size = MAX_SIZE;
@@ -105,23 +109,28 @@ private:
 };
 
 struct ReorderFunctions : public Pass {
-  typedef std::unordered_map<Name, StringRef> FunctionDataMap;
+  std::unordered_map<Name, StringRef> functionDataMap;
+  std::unordered_map<Name, Index> originalIndexes;
 
   void run(PassRunner* runner, Module* module) override {
+    // we'll use the original indexes to break ties
+    std::for_each(module->functions.begin(), module->functions.end(), [&](const std::unique_ptr<Function>& a) {
+      originalIndexes[a->name] = originalIndexes.size();
+    });
     // sort by uses
     sortByUses(module);
     // get binary data for remaining work
     BufferWithRandomAccess buffer;
     WasmBinaryWriter writer(module, buffer);
     writer.write();
-    FunctionDataMap functionDataMap;
     for (size_t i = 0; i < module->functions.size(); i++) {
       functionDataMap[module->functions[i]->name] = StringRef(
         &buffer[writer.tableOfContents.functions[i].offset],
         writer.tableOfContents.functions[i].size
       );
     }
-    refineBySimilarity(module, functionDataMap);
+    refineBySize(module);
+    refineBySimilarity(module);
   }
 
   void sortByUses(Module* module) {
@@ -150,27 +159,20 @@ struct ReorderFunctions : public Pass {
         uses[curr]++;
       }
     }
-    // Sort by number of uses, break ties by original index
-    std::unordered_map<Name, Index> originalIndex;
-    std::for_each(module->functions.begin(), module->functions.end(), [&originalIndex](const std::unique_ptr<Function>& a) {
-      originalIndex[a->name] = originalIndex.size();
-    });
-    std::sort(module->functions.begin(), module->functions.end(), [&uses, &originalIndex](
+    std::sort(module->functions.begin(), module->functions.end(), [&](
       const std::unique_ptr<Function>& a,
       const std::unique_ptr<Function>& b) -> bool {
       if (uses[a->name] == uses[b->name]) {
-        return originalIndex[a->name] < originalIndex[b->name];
+        return originalIndexes[a->name] < originalIndexes[b->name];
       }
       return uses[a->name] > uses[b->name];
     });
   }
 
-  void refineBySimilarity(Module* module, FunctionDataMap& functionDataMap) {
+  void refineBySize(Module* module) {
     auto& functions = module->functions;
     size_t start = 0,
            bits = 0;
-    // similarity is to the last element, which may be from a previous chunk
-    Name last;
     while (start < functions.size()) {
       bits += BitsPerLEBByte;
       size_t end;
@@ -179,6 +181,29 @@ struct ReorderFunctions : public Pass {
       } else {
         end = functions.size();
       }
+      std::sort(module->functions.begin() + start, module->functions.begin() + end, [&](
+        const std::unique_ptr<Function>& a,
+        const std::unique_ptr<Function>& b) -> bool {
+        auto aSize = functionDataMap[a->name].size;
+        auto bSize = functionDataMap[b->name].size;
+        if (aSize == bSize) {
+          return originalIndexes[a->name] < originalIndexes[b->name];
+        }
+        return aSize > bSize;
+      });
+      start = end;
+    }
+  }
+
+  void refineBySimilarity(Module* module) {
+    // compare in chunks, to avoid full O(n^2)
+    const size_t CHUNK_SIZE = 32;
+    auto& functions = module->functions;
+    size_t start = 0;
+    // similarity is to the last element, which may be from a previous chunk
+    Name last;
+    while (start < functions.size()) {
+      size_t end = std::min(start + CHUNK_SIZE, functions.size());
       // sort them using the distance metric, plus size as secondary
       for (size_t i = start; i < end; i++) {
         if (!last.is()) {
@@ -189,6 +214,7 @@ struct ReorderFunctions : public Pass {
           size_t bestIndex = i;
           auto bestDifference = compressibleDifference(functionDataMap[last], functionDataMap[functions[i]->name]);
           for (size_t j = i + 1; j < end; j++) {
+//std::cout << start << " : " << i << " : " << j << " : " << functions.size() << '\n';
             auto currDifference = compressibleDifference(functionDataMap[last], functionDataMap[functions[j]->name]);
             if (currDifference < bestDifference ||
                 (currDifference == bestDifference && functionDataMap[functions[j]->name].size >
