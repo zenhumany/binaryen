@@ -21,7 +21,7 @@
 #include "support/colors.h"
 #include "support/command-line.h"
 #include "support/file.h"
-#include "wasm-s-parser.h"
+#include "wasm-io.h"
 #include "wasm2asm.h"
 
 using namespace cashew;
@@ -37,11 +37,6 @@ int main(int argc, const char *argv[]) {
              o->extra["output"] = argument;
              Colors::disable();
            })
-      .add("--allow-asserts", "", "Allow compilation of .wast testing asserts",
-           Options::Arguments::Zero,
-           [](Options* o, const std::string& argument) {
-             o->extra["asserts"] = "1";
-           })
       .add("--pedantic", "", "Emulate WebAssembly trapping behavior",
            Options::Arguments::Zero,
            [&](Options* o, const std::string& argument) {
@@ -54,31 +49,22 @@ int main(int argc, const char *argv[]) {
   options.parse(argc, argv);
   if (options.debug) builderFlags.debug = true;
 
-  auto input(
-      read_file<std::vector<char>>(options.extra["infile"], Flags::Text, options.debug ? Flags::Debug : Flags::Release));
-
-  if (options.debug) std::cerr << "s-parsing..." << std::endl;
-  SExpressionParser parser(input.data());
-  Element &root = *parser.root;
-
-  if (options.debug) std::cerr << "w-parsing..." << std::endl;
+  if (options.debug) std::cerr << "loading..." << std::endl;
   Module wasm;
-  SExpressionWasmBuilder builder(wasm, *root[0]);
+  ModuleReader reader;
+  reader.setDebug(options.debug);
+  try {
+    reader.read(options.extra["infile"], wasm);
+  } catch (ParseException& p) {
+    p.dump(std::cerr);
+    Fatal() << "error in parsing input";
+  } catch (std::bad_alloc& b) {
+    Fatal() << "error in building module, std::bad_alloc (possibly invalid request for silly amounts of memory)";
+  }
 
   if (options.debug) std::cerr << "asming..." << std::endl;
   Wasm2AsmBuilder wasm2asm(builderFlags);
   Ref asmjs = wasm2asm.processWasm(&wasm);
-
-  if (options.extra["asserts"] == "1") {
-    if (options.debug) std::cerr << "asserting..." << std::endl;
-    flattenAppend(asmjs, wasm2asm.processAsserts(root, builder));
-  }
-
-  if (options.debug) {
-    std::cerr << "a-printing..." << std::endl;
-    asmjs->stringify(std::cout, true);
-    std::cout << '\n';
-  }
 
   if (options.debug) std::cerr << "j-printing..." << std::endl;
   JSPrinter jser(true, true, asmjs);

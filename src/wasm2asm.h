@@ -132,8 +132,6 @@ public:
   //               if we have one.
   Ref processFunctionBody(Function* func, IString result);
 
-  Ref processAsserts(Element& e, SExpressionWasmBuilder& sexpBuilder);
-
   // Get a temp var.
   IString getTemp(WasmType type, Function* func) {
     IString ret;
@@ -210,13 +208,6 @@ private:
   void addTables(Ref ast, Module* wasm);
   void addExports(Ref ast, Module* wasm);
   void addWasmCompatibilityFuncs(Module* wasm);
-  bool isAssertHandled(Element& e);
-  Ref makeAssertReturnFunc(SExpressionWasmBuilder& sexpBuilder,
-                           Builder& wasmBuilder,
-                           Element& e, Name testFuncName);
-  Ref makeAssertTrapFunc(SExpressionWasmBuilder& sexpBuilder,
-                         Builder& wasmBuilder,
-                         Element& e, Name testFuncName);
   Wasm2AsmBuilder() = delete;
   Wasm2AsmBuilder(const Wasm2AsmBuilder &) = delete;
   Wasm2AsmBuilder &operator=(const Wasm2AsmBuilder&) = delete;
@@ -1570,178 +1561,6 @@ Ref Wasm2AsmBuilder::processFunctionBody(Function* func, IString result) {
   };
   return ExpressionProcessor(this, func).visit(func->body, result);
 }
-
-static Ref makeInstantiation() {
-  Ref lib = ValueBuilder::makeObject();
-  auto insertItem = [&](IString item) {
-    ValueBuilder::appendToObject(lib, item, ValueBuilder::makeName(item));
-  };
-  insertItem(MATH);
-  insertItem(INT8ARRAY);
-  insertItem(INT16ARRAY);
-  insertItem(INT32ARRAY);
-  insertItem(UINT8ARRAY);
-  insertItem(UINT16ARRAY);
-  insertItem(UINT32ARRAY);
-  insertItem(FLOAT32ARRAY);
-  insertItem(FLOAT64ARRAY);
-  Ref env = ValueBuilder::makeObject();
-  Ref mem = ValueBuilder::makeNew(
-      ValueBuilder::makeCall(ARRAY_BUFFER, ValueBuilder::makeInt(0x10000)));
-  Ref call = ValueBuilder::makeCall(IString(ASM_FUNC), lib, env, mem);
-  Ref ret = ValueBuilder::makeVar();
-  ValueBuilder::appendToVar(ret, ASM_MODULE, call);
-  return ret;
-}
-
-static void prefixCalls(Ref asmjs) {
-  if (asmjs->isArray()) {
-    ArrayStorage& arr = asmjs->getArray();
-    for (Ref& r : arr) {
-      prefixCalls(r);
-    }
-    if (arr.size() > 0 && arr[0]->isString() && arr[0]->getIString() == CALL) {
-      assert(arr.size() >= 2);
-      Ref prefixed = ValueBuilder::makeDot(ValueBuilder::makeName(ASM_MODULE),
-                                           arr[1]->getIString());
-      arr[1]->setArray(prefixed->getArray());
-    }
-  }
-}
-
-Ref Wasm2AsmBuilder::makeAssertReturnFunc(SExpressionWasmBuilder& sexpBuilder,
-                                          Builder& wasmBuilder,
-                                          Element& e, Name testFuncName) {
-  Expression* actual = sexpBuilder.parseExpression(e[1]);
-  Expression* body = nullptr;
-  if (e.size() == 2) {
-    if  (actual->type == none) {
-      body = wasmBuilder.blockify(
-        actual,
-        wasmBuilder.makeConst(Literal(uint32_t(1)))
-      );
-    } else {
-      body = actual;
-    }
-  } else if (e.size() == 3) {
-    Expression* expected = sexpBuilder.parseExpression(e[2]);
-    WasmType resType = expected->type;
-    actual->type = resType;
-    BinaryOp eqOp;
-    switch (resType) {
-      case i32: eqOp = EqInt32; break;
-      case i64: eqOp = EqInt64; break;
-      case f32: eqOp = EqFloat32; break;
-      case f64: eqOp = EqFloat64; break;
-      default: {
-        std::cerr << "Unhandled type in assert: " << resType << std::endl;
-        abort();
-      }
-    }
-    body = wasmBuilder.makeBinary(eqOp, actual, expected);
-  } else {
-    assert(false && "Unexpected number of parameters in assert_return");
-  }
-  std::unique_ptr<Function> testFunc(
-    wasmBuilder.makeFunction(
-      testFuncName,
-      std::vector<NameType>{},
-      body->type,
-      std::vector<NameType>{},
-      body
-    )
-  );
-  Ref jsFunc = processFunction(testFunc.get());
-  prefixCalls(jsFunc);
-  return jsFunc;
-}
-
-Ref Wasm2AsmBuilder::makeAssertTrapFunc(SExpressionWasmBuilder& sexpBuilder,
-                                        Builder& wasmBuilder,
-                                        Element& e, Name testFuncName) {
-  Name innerFuncName("f");
-  Expression* expr = sexpBuilder.parseExpression(e[1]);
-  std::unique_ptr<Function> exprFunc(
-    wasmBuilder.makeFunction(innerFuncName,
-                             std::vector<NameType>{},
-                             expr->type,
-                             std::vector<NameType>{},
-                             expr)
-  );
-  IString expectedErr = e[2]->str();
-  Ref innerFunc = processFunction(exprFunc.get());
-  Ref outerFunc = ValueBuilder::makeFunction(testFuncName);
-  outerFunc[3]->push_back(innerFunc);
-  Ref tryBlock = ValueBuilder::makeBlock();
-  ValueBuilder::appendToBlock(tryBlock, ValueBuilder::makeCall(innerFuncName));
-  Ref catchBlock = ValueBuilder::makeBlock();
-  ValueBuilder::appendToBlock(
-    catchBlock,
-    ValueBuilder::makeReturn(
-      ValueBuilder::makeCall(
-        ValueBuilder::makeDot(
-          ValueBuilder::makeName(IString("e")),
-          ValueBuilder::makeName(IString("message")),
-          ValueBuilder::makeName(IString("includes"))
-        ),
-        ValueBuilder::makeString(expectedErr)
-      )
-    )
-  );
-  outerFunc[3]->push_back(ValueBuilder::makeTry(
-      tryBlock,
-      ValueBuilder::makeName((IString("e"))),
-      catchBlock));
-  outerFunc[3]->push_back(ValueBuilder::makeReturn(ValueBuilder::makeInt(0)));
-  return outerFunc;
-}
-
-bool Wasm2AsmBuilder::isAssertHandled(Element& e) {
-  return e.isList() && e.size() >= 2 && e[0]->isStr()
-      && (e[0]->str() == Name("assert_return") ||
-          (flags.pedantic && e[0]->str() == Name("assert_trap")))
-      && e[1]->isList() && e[1]->size() >= 2 && (*e[1])[0]->isStr()
-      && (*e[1])[0]->str() == Name("invoke");
-}
-
-Ref Wasm2AsmBuilder::processAsserts(Element& root,
-                                   SExpressionWasmBuilder& sexpBuilder) {
-  Builder wasmBuilder(sexpBuilder.getAllocator());
-  Ref ret = ValueBuilder::makeBlock();
-  flattenAppend(ret, makeInstantiation());
-  for (size_t i = 1; i < root.size(); ++i) {
-    Element& e = *root[i];
-    if (!isAssertHandled(e)) {
-      std::cerr << "skipping " << e << std::endl;
-      continue;
-    }
-    Name testFuncName(IString(("check" + std::to_string(i)).c_str(), false));
-    bool isReturn = (e[0]->str() == Name("assert_return"));
-    Element& testOp = *e[1];
-    // Replace "invoke" with "call"
-    testOp[0]->setString(IString("call"), false, false);
-    // Need to claim dollared to get string as function target
-    testOp[1]->setString(testOp[1]->str(), /*dollared=*/true, false);
-
-    Ref testFunc = isReturn ?
-        makeAssertReturnFunc(sexpBuilder, wasmBuilder, e, testFuncName) :
-        makeAssertTrapFunc(sexpBuilder, wasmBuilder, e, testFuncName);
-
-    flattenAppend(ret, testFunc);
-    std::stringstream failFuncName;
-    failFuncName << "fail" << std::to_string(i);
-    flattenAppend(
-      ret,
-      ValueBuilder::makeIf(
-        ValueBuilder::makeUnary(L_NOT, ValueBuilder::makeCall(testFuncName)),
-        ValueBuilder::makeCall(IString(failFuncName.str().c_str(), false)),
-        Ref()
-      )
-    );
-  }
-  return ret;
-}
-
 
 } // namespace wasm
 
