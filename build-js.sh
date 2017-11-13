@@ -386,3 +386,14 @@ export_function "_BinaryenSetAPITracing"
   -o bin/binaryen${OUT_FILE_SUFFIX}.js \
   --pre-js src/js/binaryen.js-pre.js \
   --post-js src/js/binaryen.js-post.js
+
+"$EMSCRIPTEN/em++" \
+  $EMCC_ARGS \
+  -s WASM=1 \
+  src/binaryen-c.cpp \
+  shared.bc \
+  -Isrc/ \
+  -s EXPORTED_FUNCTIONS=[${EXPORTED_FUNCTIONS}] \
+  -o bin/binaryen${OUT_FILE_SUFFIX}.wasm.js \
+  --pre-js src/js/binaryen.js-pre.js \
+  --post-js src/js/binaryen.js-post.js

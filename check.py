@@ -43,7 +43,7 @@ if options.interpreter:
 def run_help_tests():
   print '[ checking --help is useful... ]\n'
 
-  not_executable_suffix = ['.txt', '.js', '.ilk', '.pdb', '.dll']
+  not_executable_suffix = ['.txt', '.js', '.ilk', '.pdb', '.dll', '.wasm']
   executables = sorted(filter(lambda x: not any(x.endswith(s) for s in
                                                 not_executable_suffix) and os.path.isfile(x),
                               os.listdir(options.binaryen_bin)))
@@ -323,18 +323,25 @@ def run_spec_tests():
 def run_binaryen_js_tests():
   print '\n[ checking binaryen.js testcases... ]\n'
 
+  # the wasm file needs to be findable, copy it to current dir
+  shutil.copyfile(os.path.join(options.binaryen_bin, 'binaryen.wasm.wasm'),
+                  os.path.join(os.getcwd(), 'binaryen.wasm.wasm'))
+
   for s in sorted(os.listdir(os.path.join(options.binaryen_test, 'binaryen.js'))):
     if not s.endswith('.js'): continue
     print s
-    f = open('a.js', 'w')
-    f.write(open(os.path.join(options.binaryen_bin, 'binaryen.js')).read())
-    f.write(open(os.path.join(options.binaryen_test, 'binaryen.js', s)).read())
-    f.close()
-    cmd = [MOZJS, 'a.js']
-    out = run_command(cmd, stderr=subprocess.STDOUT)
-    expected = open(os.path.join(options.binaryen_test, 'binaryen.js', s + '.txt')).read()
-    if expected not in out:
-      fail(out, expected)
+    for wasm in [0, 1]:
+      binaryen_js = os.path.join(options.binaryen_bin, 'binaryen' + ('.wasm' if wasm else '') + '.js')
+      print '  using', binaryen_js
+      f = open('a.js', 'w')
+      f.write(open(binaryen_js).read())
+      f.write(open(os.path.join(options.binaryen_test, 'binaryen.js', s)).read())
+      f.close()
+      cmd = [MOZJS, 'a.js']
+      out = run_command(cmd, stderr=subprocess.STDOUT)
+      expected = open(os.path.join(options.binaryen_test, 'binaryen.js', s + '.txt')).read()
+      if expected not in out:
+        fail(out, expected)
 
 def run_validator_tests():
   print '\n[ running validation tests... ]\n'
