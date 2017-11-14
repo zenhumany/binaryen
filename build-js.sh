@@ -385,7 +385,6 @@ export_function "_BinaryenSetAPITracing"
   -Isrc/ \
   -s EXPORTED_FUNCTIONS=[${EXPORTED_FUNCTIONS}] \
   -o bin/binaryen${OUT_FILE_SUFFIX}.js \
-  --pre-js src/js/binaryen.js-pre.js \
   --post-js src/js/binaryen.js-post.js
 echo "var Binaryen = Binaryen();" >> bin/binaryen${OUT_FILE_SUFFIX}.js
 
