@@ -37,7 +37,8 @@ elif [ ! -d "$EMSCRIPTEN" ]; then
   exit 1
 fi
 
-EMCC_ARGS="-std=c++11 --memory-init-file 0"
+EMCC_ARGS="-std=c++11 --memory-init-file 0 -s NO_EXIT_RUNTIME=1"
+EMCC_ARGS="$EMCC_ARGS -s MODULARIZE=1 -s EXPORT_NAME=\"Binaryen\""
 EMCC_ARGS="$EMCC_ARGS -s ALLOW_MEMORY_GROWTH=1"
 EMCC_ARGS="$EMCC_ARGS -s DEMANGLE_SUPPORT=1"
 EMCC_ARGS="$EMCC_ARGS -s DISABLE_EXCEPTION_CATCHING=0" # Exceptions are thrown and caught when optimizing endless loops
@@ -386,3 +387,5 @@ export_function "_BinaryenSetAPITracing"
   -o bin/binaryen${OUT_FILE_SUFFIX}.js \
   --pre-js src/js/binaryen.js-pre.js \
   --post-js src/js/binaryen.js-post.js
+echo "var Binaryen = Binaryen();" >> bin/binaryen${OUT_FILE_SUFFIX}.js
+
