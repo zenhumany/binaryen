@@ -694,6 +694,9 @@ struct OptimizeInstructions : public WalkerPass<PostWalker<OptimizeInstructions,
           }
         }
       }
+      // no other major simplification. potentially conditionalize (if-ify)
+      // if the arms are expensive
+      return conditionalizeExpensiveSelectArms(select);
     } else if (auto* br = curr->dynCast<Break>()) {
       if (br->condition) {
         br->condition = optimizeBoolean(br->condition);
@@ -899,14 +902,20 @@ private:
     );
   }
 
+  // the minimum cost for which to conditionalize
+  const Index MIN_COST = 7;
+
+  bool canConditionalize() {
+    auto& options = getPassRunner()->options;
+    return options.optimizeLevel >= 2 && options.shrinkLevel == 0;
+  }
+
   //   expensive1 | expensive2 can be turned into expensive1 ? 1 : expensive2, and
   //   expensive | cheap     can be turned into cheap     ? 1 : expensive,
   // so that we can avoid one expensive computation, if it has no side effects.
   Expression* conditionalizeExpensiveOnBitwise(Binary* binary) {
     // this operation can increase code size, so don't always do it
-    auto& options = getPassRunner()->options;
-    if (options.optimizeLevel < 2 || options.shrinkLevel > 0) return nullptr;
-    const auto MIN_COST = 7;
+    if (!canConditionalize()) return nullptr;
     assert(binary->op == AndInt32 || binary->op == OrInt32);
     if (binary->right->is<Const>()) return nullptr; // trivial
     // bitwise logical operator on two non-numerical values, check if they are boolean
@@ -942,6 +951,33 @@ private:
     } else { // &
       return builder.makeIf(left, right, builder.makeConst(Literal(int32_t(0))));
     }
+  }
+
+  // A select can be turned into the if, which can avoid computing one of the
+  // arms - useful if it is expensive. this does reorder and increase code size,
+  // though, so we do this conservatively.
+  Expression* conditionalizeExpensiveSelectArms(Select* select) {
+    // this operation can increase code size, so don't always do it
+    if (!canConditionalize()) return nullptr;
+    auto* condition = select->condition;
+    auto* left = select->ifTrue;
+    auto* right = select->ifFalse;
+    auto leftEffects = EffectAnalyzer(getPassOptions(), left);
+    if (leftEffects.hasSideEffects()) return nullptr; // can't conditionalize it
+    auto rightEffects = EffectAnalyzer(getPassOptions(), right);
+    if (rightEffects.hasSideEffects()) return nullptr; // can't conditionalize it
+    auto conditionEffects = EffectAnalyzer(getPassOptions(), condition);
+    if (conditionEffects.invalidates(leftEffects) ||
+        conditionEffects.invalidates(rightEffects)) {
+      return nullptr; // cannot reorder
+    }
+    if (std::max(CostAnalyzer(left).cost,
+                 CostAnalyzer(right).cost) < MIN_COST) {
+      return nullptr; // not worth it, too cheap to execute
+    }
+    // worth it! perform conditionalization
+    Builder builder(*getModule());
+    return builder.makeIf(condition, left, right);
   }
 
   // fold constant factors into the offset
