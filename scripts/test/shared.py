@@ -164,6 +164,8 @@ WASM_SHELL = [os.path.join(options.binaryen_bin, 'wasm-shell')]
 WASM_MERGE = [os.path.join(options.binaryen_bin, 'wasm-merge')]
 S2WASM = [os.path.join(options.binaryen_bin, 's2wasm')]
 WASM_REDUCE = [os.path.join(options.binaryen_bin, 'wasm-reduce')]
+LLD_METADATA = [os.path.join(options.binaryen_bin, 'lld-metadata')]
+LLD_EMSCRIPTEN = [os.path.join(options.binaryen_bin, 'lld-emscripten')]
 
 S2WASM_EXE = S2WASM[0]
 WASM_SHELL_EXE = WASM_SHELL[0]
